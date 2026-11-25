@@ -1,0 +1,32 @@
+[package]
+name = "manifatura-agent"
+description = "The core of manifatura: the agent loop, typed hooks, sessions as a tree, and the Provider, Env and Store traits."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-agent"
+
+[features]
+# `testing`: a scripted provider, for tests of apps and hook bundles.
+testing = []
+
+[dependencies]
+async-trait.workspace = true
+futures-util.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros"] }
+
+[dev-dependencies]
+manifatura-agent = { path = ".", features = ["testing"] }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

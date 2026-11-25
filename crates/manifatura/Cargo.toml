@@ -1,0 +1,36 @@
+[package]
+name = "manifatura"
+description = "A small Rust library for building agents into your own programs: a loop, typed hooks and sessions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+documentation = "https://docs.rs/manifatura"
+
+[features]
+default = ["kit", "models-openai", "store-jsonl", "tools"]
+kit = ["dep:manifatura-kit"]
+models-openai = ["dep:manifatura-models", "manifatura-models/openai"]
+store-jsonl = ["dep:manifatura-store"]
+tools = ["dep:manifatura-tools"]
+mcp = ["dep:manifatura-mcp"]
+testing = ["manifatura-agent/testing"]
+
+[dependencies]
+manifatura-agent.workspace = true
+manifatura-kit = { workspace = true, optional = true }
+manifatura-mcp = { workspace = true, optional = true }
+manifatura-models = { workspace = true, optional = true }
+manifatura-store = { workspace = true, optional = true }
+manifatura-tools = { workspace = true, optional = true }
+schemars.workspace = true
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -1,0 +1,30 @@
+[package]
+name = "manifatura-examples"
+description = "Runnable examples for the Manifatura framework."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+
+[dependencies]
+manifatura = { workspace = true, features = [] }
+schemars.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "io-std", "io-util"] }
+
+[[example]]
+name = "hello"
+path = "hello.rs"
+
+[[example]]
+name = "typed-tool"
+path = "typed-tool.rs"
+
+[[example]]
+name = "dynamic-agent"
+path = "dynamic-agent.rs"
+
+[[example]]
+name = "hooks"
+path = "hooks.rs"

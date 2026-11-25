@@ -1,0 +1,29 @@
+[package]
+name = "manifatura-kit"
+description = "Hook bundles for manifatura: approvals, compaction, a deferred tool catalog, input repair, AGENTS.md context."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-kit"
+
+[dependencies]
+async-trait.workspace = true
+futures-util.workspace = true
+manifatura-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+
+[dev-dependencies]
+manifatura-agent = { workspace = true, features = ["testing"] }
+schemars.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
