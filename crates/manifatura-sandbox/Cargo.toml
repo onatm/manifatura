@@ -1,6 +1,6 @@
 [package]
 name = "manifatura-sandbox"
-description = "A sandboxed env for manifatura: commands run under macOS Seatbelt, writing only to the workspace, without the network."
+description = "A sandboxed env for manifatura: commands run under macOS Seatbelt or Linux bubblewrap, writing only to the workspace, without the network."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

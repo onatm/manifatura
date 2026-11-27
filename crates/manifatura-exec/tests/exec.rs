@@ -231,10 +231,12 @@ fn escalation_adds_its_fields_only_when_on() {
     assert!(!manifatura_exec::is_escalation(&call(json!({"cmd": "ls"}))));
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn an_escalated_command_runs_outside_the_sandbox() {
-    let base = std::env::temp_dir().join(format!("mf-exec-esc-{}", std::process::id()));
+    // Not under /tmp, which the sandbox lets commands write to.
+    let base = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("mf-exec-esc-{}", std::process::id()));
     let (dir, outside) = (base.join("ws"), base.join("outside"));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::create_dir_all(&outside).unwrap();

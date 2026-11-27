@@ -18,7 +18,7 @@
 //! | `mcp` | [`mcp`]: MCP servers' tools, over stdio or HTTP |
 //! | `exec` | [`exec`]: `exec_command` and `write_stdin`, commands that keep running in the background (with `tools`, terminals for `tools::Local`) |
 //! | `policy` | [`policy`]: allow, ask and deny rules for tools and shell command prefixes, asking through [`kit::Approvals`] |
-//! | `sandbox` | [`sandbox`]: an env whose commands run under macOS Seatbelt, writing only to the workspace, without the network |
+//! | `sandbox` | [`sandbox`]: an env whose commands run in a sandbox (macOS Seatbelt, Linux bubblewrap), writing only to the workspace, without the network |
 //! | `auth` | [`auth`]: signing in to a model vendor, such as OpenAI's Sign in with ChatGPT for the user's plan |
 //! | `testing` | `testing`: a scripted provider for tests |
 //!

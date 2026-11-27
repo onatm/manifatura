@@ -1,4 +1,4 @@
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,7 +14,9 @@ struct Ws {
 
 impl Ws {
     fn new(name: &str) -> Self {
-        let base = std::env::temp_dir().join(format!("mf-sbx-{name}-{}", std::process::id()));
+        // Not under /tmp, which the sandbox lets commands write to.
+        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("mf-sbx-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("ws");
         let outside = base.join("outside");
@@ -82,11 +84,18 @@ async fn commands_write_to_the_workspace_only() {
     )
     .await;
     assert_ne!(code, 0);
-    assert!(out.contains("Operation not permitted"), "{out}");
+    assert!(
+        out.contains("Operation not permitted") || out.contains("Read-only file system"),
+        "{out}"
+    );
     assert!(!ws.outside.join("x.txt").exists());
 
-    let (code, _) = run(&env, "mkdir .git", false).await;
-    assert_ne!(code, 0, ".git may not be created");
+    // On Linux a protected name that does not exist yet can be created.
+    #[cfg(target_os = "macos")]
+    {
+        let (code, _) = run(&env, "mkdir .git", false).await;
+        assert_ne!(code, 0, ".git may not be created");
+    }
     std::fs::create_dir(ws.dir.join(".git")).unwrap();
     let (code, _) = run(&env, "touch .git/HEAD", false).await;
     assert_ne!(code, 0, ".git is read-only");
@@ -98,11 +107,11 @@ async fn commands_write_to_the_workspace_only() {
     );
     let (code, _) = run(
         &env,
-        "echo t > /private/tmp/mf-sbx-tmp-$$ && rm /private/tmp/mf-sbx-tmp-$$",
+        "echo t > /tmp/mf-sbx-tmp-$$ && rm /tmp/mf-sbx-tmp-$$",
         false,
     )
     .await;
-    assert_eq!(code, 0, "/private/tmp is writable");
+    assert_eq!(code, 0, "/tmp is writable");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -194,7 +203,7 @@ async fn terminals_work_in_the_sandbox() {
     assert_eq!(p.wait().await.unwrap(), 0);
     let text = String::from_utf8_lossy(&env.read(&out).await.unwrap()).into_owned();
     assert!(
-        text.contains("/dev/ttys") && text.contains("interactive"),
+        text.contains("/dev/") && text.contains("interactive"),
         "{text}"
     );
 }

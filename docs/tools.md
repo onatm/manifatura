@@ -141,7 +141,7 @@ A sandbox, a container or a remote machine is another `Env` implementation; the 
 
 ### A sandbox
 
-The `sandbox` feature (the `manifatura-sandbox` crate) wraps an env so that its commands run under macOS Seatbelt:
+The `sandbox` feature (the `manifatura-sandbox` crate) wraps an env so that its commands run in a sandbox: macOS Seatbelt, or bubblewrap on Linux:
 
 ```rust
 use manifatura::sandbox::Sandbox;
@@ -152,7 +152,15 @@ let env = Sandbox::new(tools::Local::new(".")?)?
 let rt = Runtime::builder().provider(providers::from_env()?).env(env).build();
 ```
 
-Sandboxed commands read anything but write only to the workspace, the env's scratch directory and `/private/tmp`, never to `.git` or `.agents` at the top of the workspace; they have no network beyond binding ports and talking to `localhost`. The env's own writes (the file tools') follow the same rules. `writable(path)` and `network(true)` widen it. It runs on macOS only for now; elsewhere `Sandbox::new` fails with `Unsupported`.
+Sandboxed commands read anything but write only to the workspace, the env's scratch directory and `/tmp`, never to `.git` or `.agents` at the top of the workspace; they have no network beyond binding ports and talking to `localhost`. The env's own writes (the file tools') follow the same rules. `writable(path)` and `network(true)` widen it.
+
+| | macOS | Linux |
+| --- | --- | --- |
+| Backend | Seatbelt (`/usr/bin/sandbox-exec`) | bubblewrap (`bwrap` from `/usr/bin` or `/bin`), which needs user namespaces: on Ubuntu 24.04 and later, AppArmor restricts them unless allowed for `bwrap` |
+| `localhost` | The host's: a server started in the sandbox is reachable from a browser | The sandbox's own: a server started in it is reachable only from other commands in it |
+| A protected name that does not exist yet | Cannot be created | Can be created by a command (the env's own writes still refuse it) |
+
+`Sandbox::new` checks that the backend runs and says why when it does not. Elsewhere (Windows) it fails with `Unsupported`.
 
 A command whose `ExecSpec::unsandboxed` is set runs on the wrapped env, outside the sandbox, but only with `allow_unsandboxed(true)`; otherwise it is refused. `Exec::escalation` lets the model ask for that (below); ask the user before such a command runs.
 
