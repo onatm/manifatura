@@ -2,6 +2,12 @@
 
 All notable changes are recorded here. The project follows [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the API.
 
+## Unreleased
+
+- **Breaking:** `manifatura-models` is now `manifatura-providers`, re-exported as `manifatura::providers`; the facade feature `models-openai` is now `providers-openai` (still on by default). Types and functions keep their names (`Models`, `OpenAi`, `from_env`, `ProviderConfig`).
+- `manifatura-providers`: `responses::Responses` (`responses` feature; `providers-responses` in the facade), a provider for OpenAI's Responses API: stateless, with encrypted reasoning sent back, tools optionally grouped in a namespace, and its bearer token from a key or from `Credentials`, a trait for tokens that refresh. It sends the request's `tool_choice`.
+- `manifatura-auth`, new, as `manifatura::auth` behind the `auth` feature (off by default): signing in to model vendors. `openai::SignIn` is OpenAI's Sign in with ChatGPT: dynamic client registration, a loopback callback on `127.0.0.1`, tokens in an owner-only file refreshed across processes under a lock, the plan's models, and a `Responses` provider on the user's plan. `examples/sign-in.rs` shows it.
+
 ## 0.3.0
 
 - `manifatura-subagents`, new, as `manifatura::subagents` behind the `subagents` feature (off by default): a `task` tool that runs a subagent in a child session and returns its report. A subagent is an agent of its own or the calling session's agent with a brief (`Subagent::like_parent`), so it reuses the parent's prompt cache; it can also be written as Markdown (`Definition`). Approvals are shared both ways, nesting is limited (`max_depth`, 1 by default), aborting the parent aborts the child, and child events reach `action.log` and `Subagents::on_event`. `Subagents::run` starts a subagent from the app, as a task call would. `Subagent::tools` (or `tools:` in Markdown) limits the tools a child may call, keeping its prompt; `Subagent::max_steps` caps its model calls and keeps the last for its report.

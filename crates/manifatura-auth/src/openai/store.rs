@@ -39,7 +39,7 @@ pub(crate) struct Session {
 
 impl Session {
     pub fn plan_usage(&self) -> bool {
-        self.scopes.iter().any(|s| s == crate::PLAN_SCOPE)
+        self.scopes.iter().any(|s| s == super::PLAN_SCOPE)
     }
 }
 
@@ -73,7 +73,7 @@ impl Store {
             return Ok(s);
         }
         let s = Saved {
-            host_id: crate::oauth::new_host_id(),
+            host_id: super::oauth::new_host_id(),
             ..Default::default()
         };
         self.write(&s)?;

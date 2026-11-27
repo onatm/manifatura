@@ -2,10 +2,10 @@
 //! carries the whole conversation, with `store: false`.
 //!
 //! The bearer token comes from [`Credentials`], so a sign-in that refreshes its tokens (such as
-//! `manifatura-chatgpt`) plugs in without this crate knowing how it signs in.
+//! `manifatura-auth`) plugs in without this crate knowing how it signs in.
 //!
 //! ```no_run
-//! use manifatura_models::responses::Responses;
+//! use manifatura_providers::responses::Responses;
 //!
 //! let provider = Responses::new("https://api.openai.com/v1").key("sk-…");
 //! ```

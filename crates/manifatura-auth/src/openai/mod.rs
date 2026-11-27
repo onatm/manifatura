@@ -1,4 +1,4 @@
-//! Sign in with ChatGPT for manifatura: the user signs in through the browser and approves
+//! OpenAI's Sign in with ChatGPT: the user signs in through the browser and approves
 //! plan usage, and the model calls of your agent run on their ChatGPT plan.
 //!
 //! This follows OpenAI's flow for open-source and locally run apps: the app registers itself
@@ -6,29 +6,27 @@
 //! callback on `127.0.0.1`, and requests go to the public Responses API.
 //!
 //! ```no_run
-//! # async fn demo() -> Result<(), manifatura_chatgpt::Error> {
-//! use manifatura_chatgpt::ChatGpt;
+//! # async fn demo() -> Result<(), manifatura_auth::openai::Error> {
+//! use manifatura_auth::openai::SignIn;
 //!
-//! let chatgpt = ChatGpt::new("my-app", ChatGpt::default_path("my-app"));
-//! if chatgpt.account().is_none() {
-//!     let login = chatgpt.login().await?;
+//! let sign_in = SignIn::new("my-app", SignIn::default_path("my-app"));
+//! if sign_in.account().is_none() {
+//!     let login = sign_in.login().await?;
 //!     println!("Open {}", login.url()); // or open the browser for the user
 //!     let account = login.finish().await?;
 //!     println!("Signed in as {:?}", account.email);
 //! }
-//! let models = chatgpt.models().await?;
-//! let provider = chatgpt.provider(); // a manifatura Provider
+//! let models = sign_in.models().await?;
+//! let provider = sign_in.provider(); // a manifatura Provider
 //! # let _ = (models, provider);
 //! # Ok(()) }
 //! ```
 //!
-//! Tokens live in one owner-only JSON file per app ([`ChatGpt::default_path`]). Refreshes are
+//! Tokens live in one owner-only JSON file per app ([`SignIn::default_path`]). Refreshes are
 //! serialised across processes with a lock file beside it, since a refresh token rotates.
 //!
 //! Show the user "Using ChatGPT plan" near the composer and link "Manage usage" to
 //! [`USAGE_URL`], as OpenAI's guidelines ask.
-
-#![warn(missing_debug_implementations, missing_docs)]
 
 mod oauth;
 mod store;
@@ -38,7 +36,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use manifatura_agent::{ErrorKind, ProviderError};
-use manifatura_models::responses::{BearerFuture, Credentials, Responses};
+use manifatura_providers::responses::{BearerFuture, Credentials, Responses};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -117,7 +115,7 @@ pub struct Model {
 
 /// Sign in with ChatGPT for one app. Cheap to clone.
 #[derive(Clone, Debug)]
-pub struct ChatGpt {
+pub struct SignIn {
     inner: Arc<Inner>,
 }
 
@@ -133,7 +131,7 @@ struct Inner {
     refreshing: tokio::sync::Mutex<()>,
 }
 
-impl ChatGpt {
+impl SignIn {
     /// Sign-in for `app` (its name, shown to the user when it first registers), with its
     /// credentials at `path`.
     pub fn new(app: impl Into<String>, path: impl Into<PathBuf>) -> Self {
@@ -231,7 +229,7 @@ impl ChatGpt {
         )
         .map_err(|e| Error::new(e.to_string()))?;
         Ok(Login {
-            chatgpt: self.clone(),
+            sign_in: self.clone(),
             url: url.to_string(),
             listener,
             state,
@@ -411,7 +409,7 @@ impl ChatGpt {
     }
 }
 
-impl Credentials for ChatGpt {
+impl Credentials for SignIn {
     fn bearer(&self, refused: bool) -> BearerFuture<'_> {
         Box::pin(self.access(refused))
     }
@@ -464,7 +462,7 @@ fn scopes(v: &Value) -> Option<Vec<String>> {
 /// A sign-in in progress: open [`url`](Self::url) in the browser, then [`finish`](Self::finish).
 #[derive(Debug)]
 pub struct Login {
-    chatgpt: ChatGpt,
+    sign_in: SignIn,
     url: String,
     listener: TcpListener,
     state: String,
@@ -498,7 +496,7 @@ impl Login {
     }
 
     async fn complete(&self, cb: oauth::Callback) -> Result<Account, Error> {
-        let inner = &self.chatgpt.inner;
+        let inner = &self.sign_in.inner;
         let client_id = match (&self.client_id, cb.client_id) {
             (None, Some(issued)) => issued,
             (None, None) => {

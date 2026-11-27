@@ -7,7 +7,7 @@
 
 use std::io::Write;
 
-use manifatura::{Agent, Event, Json, Runtime, SessionId, Tool, ToolError, models};
+use manifatura::{Agent, Event, Json, Runtime, SessionId, Tool, ToolError, providers};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let agent =
         Agent::new("You answer questions about orders. Look orders up; never guess.").tool(&lookup);
-    let rt = Runtime::builder().provider(models::from_env()?).build();
+    let rt = Runtime::builder().provider(providers::from_env()?).build();
 
     let prompt = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     let prompt = if prompt.is_empty() {

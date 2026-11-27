@@ -9,7 +9,7 @@ manifatura is a small Rust library for building agents into your own programs: a
 The loop decides nothing a hook could decide. Approvals, compaction, tool discovery and input repair are hooks you add, and the ones in `kit` are plain functions you can read, copy or replace. Agents are Rust values built in your `main.rs`: there is no directory format, no server and no CLI of its own.
 
 ```rust
-use manifatura::{Agent, Event, Runtime, SessionId, ToolCall, kit, models, tools};
+use manifatura::{Agent, Event, Runtime, SessionId, ToolCall, kit, providers, tools};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tools(tools::all()) // read, edit, grep, glob, bash
         .hooks(kit::approve(["edit", "bash"], ask));
     let rt = Runtime::builder()
-        .provider(models::from_env()?) // e.g. MANIFATURA_MODEL=llamacpp/qwen3.5-9b
+        .provider(providers::from_env()?) // e.g. MANIFATURA_MODEL=llamacpp/qwen3.5-9b
         .env(tools::Local::new(".")?)
         .build();
 
@@ -44,7 +44,7 @@ async fn ask(call: ToolCall) -> kit::Answer {
 - **Typed hooks.** Fifteen points in the loop, each an event type with its own return value: `agent.on(|e: hook::ToolCall, cx| async { … })`. A hook can rewrite a call, deny it, answer it itself, change the tools for the next model call, or keep the turn going.
 - **Sessions as a tree.** Every message, state change and compaction is an entry with a parent, appended to a store. Resume a session, branch from any entry, or read the file with `jq`.
 - **Compaction when you ask.** Nothing summarises by itself. Call `Session::compact`, or add `kit::compaction::on_overflow` to compact when the model reports a full context, or `kit::compaction::auto` past a share of the window.
-- **Any model.** `models` speaks to llama.cpp's server, and to any other OpenAI-compatible server you register. Any other model is a `Provider`: one function that streams a reply, which is enough to run a model in your own process.
+- **Any model.** `providers` speaks to llama.cpp's server, and to any other OpenAI-compatible server you register. Any other model is a `Provider`: one function that streams a reply, which is enough to run a model in your own process.
 - **Tools.** Your own tools from a closure and a `JsonSchema` input, or from a program; the basic `read`, `edit`, `grep`, `glob` and `bash`; MCP servers' tools, over stdio or HTTP. Tools act through an `Env`, so the same tools run locally, in a sandbox or on another machine.
 - **Deferred tools.** Tools marked deferred stay out of the prompt, and `kit::catalog` lets the model search for them and run them. Useful with MCP servers that bring dozens of tools.
 - **`AGENTS.md` context.** `kit::context` finds `AGENTS.md` (or `CLAUDE.md`) files from the repository root down, and builds a system prompt from them and the tools' own guidelines.
@@ -64,7 +64,9 @@ manifatura needs Rust 1.91 or newer. `Local` and the `bash` tool run on Unix: Li
 | Feature | Default | What it adds |
 | --- | --- | --- |
 | `kit` | yes | `manifatura::kit`: approvals, compaction, the catalog, input repair, `AGENTS.md` context |
-| `models-openai` | yes | `manifatura::models`: llama.cpp and other OpenAI-compatible servers |
+| `providers-openai` | yes | `manifatura::providers`: llama.cpp and other OpenAI-compatible servers |
+| `providers-responses` | no | `manifatura::providers::responses`: OpenAI's Responses API, with pluggable credentials |
+| `auth` | no | `manifatura::auth`: signing in to a model vendor, such as OpenAI's Sign in with ChatGPT |
 | `skills` | yes | `manifatura::skills`: Agent Skills, a catalog for the prompt and the `skill` tool |
 | `store-jsonl` | yes | `manifatura::store`: sessions as JSON lines |
 | `tools` | yes | `manifatura::tools`: `read`, `edit`, `grep`, `glob`, `bash` and `Local` |
@@ -122,7 +124,8 @@ Hooks registered on the runtime run before the agent's own, each in the order ad
 | [`manifatura-kit`](https://docs.rs/manifatura-kit) | Hook bundles and `AGENTS.md` context |
 | [`manifatura-skills`](https://docs.rs/manifatura-skills) | Agent Skills: discovery, the prompt catalog and the `skill` tool |
 | [`manifatura-subagents`](https://docs.rs/manifatura-subagents) | Subagents: the `task` tool and child sessions |
-| [`manifatura-models`](https://docs.rs/manifatura-models) | llama.cpp and other OpenAI-compatible providers, streamed over SSE |
+| [`manifatura-providers`](https://docs.rs/manifatura-providers) | llama.cpp and other OpenAI-compatible providers, and OpenAI's Responses API, streamed over SSE |
+| [`manifatura-auth`](https://docs.rs/manifatura-auth) | Signing in to a model vendor: OpenAI's Sign in with ChatGPT |
 | [`manifatura-store`](https://docs.rs/manifatura-store) | Sessions as JSON lines |
 | [`manifatura-tools`](https://docs.rs/manifatura-tools) | `read`, `edit`, `grep`, `glob`, `bash`, script tools and `Local` |
 | [`manifatura-mcp`](https://docs.rs/manifatura-mcp) | MCP servers' tools, over stdio or streamable HTTP |

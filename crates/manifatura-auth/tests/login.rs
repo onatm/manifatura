@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
-use manifatura_chatgpt::ChatGpt;
-use manifatura_models::responses::Credentials;
+use manifatura_auth::openai::SignIn;
+use manifatura_providers::responses::Credentials;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -173,7 +173,7 @@ async fn signs_in_refreshes_and_lists_models() {
     let issuer = start_issuer().await;
     let url = issuer.lock().unwrap().url.clone();
     let path = temp_path();
-    let chatgpt = ChatGpt::with_endpoints("bottega-test", &path, &url, format!("{url}/v1"));
+    let chatgpt = SignIn::with_endpoints("bottega-test", &path, &url, format!("{url}/v1"));
     assert!(chatgpt.account().is_none());
 
     let login = chatgpt.login().await.unwrap();

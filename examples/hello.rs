@@ -8,7 +8,7 @@
 
 use std::io::Write;
 
-use manifatura::{Agent, Event, Runtime, SessionId, models};
+use manifatura::{Agent, Event, Runtime, SessionId, providers};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let agent = Agent::new("You are concise.");
-    let rt = Runtime::builder().provider(models::from_env()?).build();
+    let rt = Runtime::builder().provider(providers::from_env()?).build();
     let mut turn = rt.session(&agent, SessionId::new()).prompt(prompt).await?;
 
     while let Some(event) = turn.next_event().await {

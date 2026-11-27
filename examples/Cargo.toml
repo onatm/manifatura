@@ -8,7 +8,7 @@ publish = false
 repository.workspace = true
 
 [dependencies]
-manifatura = { workspace = true, features = ["chatgpt"] }
+manifatura = { workspace = true, features = ["auth"] }
 schemars.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "io-std", "io-util"] }
@@ -30,5 +30,5 @@ name = "hooks"
 path = "hooks.rs"
 
 [[example]]
-name = "chatgpt"
-path = "chatgpt.rs"
+name = "sign-in"
+path = "sign-in.rs"

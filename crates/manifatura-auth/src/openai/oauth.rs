@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::Error;
+use super::Error;
 
 pub(crate) fn now() -> u64 {
     SystemTime::now()
@@ -74,7 +74,7 @@ pub(crate) fn form(pairs: &[(&str, &str)]) -> String {
 
 /// POSTs a form and returns the JSON body, or the OAuth error code and description.
 pub(crate) async fn post_form(url: &str, body: String) -> Result<Value, (u16, String, String)> {
-    let resp = crate::client()
+    let resp = super::client()
         .post(url)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("accept", "application/json")
@@ -231,7 +231,7 @@ pub(crate) async fn verify_id_token(
             header["alg"]
         )));
     }
-    let jwks: Value = crate::client()
+    let jwks: Value = super::client()
         .get(jwks_url)
         .send()
         .await

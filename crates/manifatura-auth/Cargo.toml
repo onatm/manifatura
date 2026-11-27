@@ -1,6 +1,6 @@
 [package]
-name = "manifatura-chatgpt"
-description = "Sign in with ChatGPT for manifatura: run models on the user's ChatGPT plan."
+name = "manifatura-auth"
+description = "Signing in to model vendors for manifatura, such as OpenAI's Sign in with ChatGPT."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,12 +9,12 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-documentation = "https://docs.rs/manifatura-chatgpt"
+documentation = "https://docs.rs/manifatura-auth"
 
 [dependencies]
 base64 = "0.23.1"
 manifatura-agent.workspace = true
-manifatura-models = { workspace = true, features = ["responses"] }
+manifatura-providers = { workspace = true, features = ["responses"] }
 reqwest.workspace = true
 ring = "0.17.14"
 rustls.workspace = true

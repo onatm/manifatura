@@ -13,23 +13,24 @@ readme = "../../README.md"
 documentation = "https://docs.rs/manifatura"
 
 [features]
-default = ["kit", "models-openai", "skills", "store-jsonl", "tools"]
+default = ["kit", "providers-openai", "skills", "store-jsonl", "tools"]
 kit = ["dep:manifatura-kit"]
-models-openai = ["dep:manifatura-models", "manifatura-models/openai"]
+providers-openai = ["dep:manifatura-providers", "manifatura-providers/openai"]
+providers-responses = ["dep:manifatura-providers", "manifatura-providers/responses"]
 store-jsonl = ["dep:manifatura-store"]
 tools = ["dep:manifatura-tools"]
 mcp = ["dep:manifatura-mcp"]
 skills = ["dep:manifatura-skills"]
 subagents = ["dep:manifatura-subagents"]
-chatgpt = ["dep:manifatura-chatgpt"]
+auth = ["dep:manifatura-auth", "providers-responses"]
 testing = ["manifatura-agent/testing"]
 
 [dependencies]
 manifatura-agent.workspace = true
-manifatura-chatgpt = { workspace = true, optional = true }
+manifatura-auth = { workspace = true, optional = true }
 manifatura-kit = { workspace = true, optional = true }
 manifatura-mcp = { workspace = true, optional = true }
-manifatura-models = { workspace = true, optional = true }
+manifatura-providers = { workspace = true, optional = true }
 manifatura-skills = { workspace = true, optional = true }
 manifatura-store = { workspace = true, optional = true }
 manifatura-subagents = { workspace = true, optional = true }

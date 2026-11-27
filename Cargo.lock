@@ -729,10 +729,10 @@ name = "manifatura"
 version = "0.3.0"
 dependencies = [
  "manifatura-agent",
- "manifatura-chatgpt",
+ "manifatura-auth",
  "manifatura-kit",
  "manifatura-mcp",
- "manifatura-models",
+ "manifatura-providers",
  "manifatura-skills",
  "manifatura-store",
  "manifatura-subagents",
@@ -755,12 +755,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "manifatura-chatgpt"
+name = "manifatura-auth"
 version = "0.3.0"
 dependencies = [
  "base64",
  "manifatura-agent",
- "manifatura-models",
+ "manifatura-providers",
  "reqwest",
  "ring",
  "rustls",
@@ -807,7 +807,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "manifatura-models"
+name = "manifatura-providers"
 version = "0.3.0"
 dependencies = [
  "futures-util",

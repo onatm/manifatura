@@ -1,17 +1,17 @@
 # Models
 
-The loop talks to models through one trait, `Provider`. `manifatura::models` has a provider for OpenAI-compatible servers and a registry that routes `provider/model-id` names to them; anything else is a `Provider` of your own.
+The loop talks to models through one trait, `Provider`. `manifatura::providers` has a provider for OpenAI-compatible servers, one for OpenAI's Responses API, and a registry that routes `provider/model-id` names to them; anything else is a `Provider` of your own.
 
 ## The registry
 
-`models::from_env()` registers [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` as `llamacpp`, at `LLAMACPP_URL` (default `http://localhost:8080`). The default model is `MANIFATURA_MODEL`.
+`providers::from_env()` registers [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` as `llamacpp`, at `LLAMACPP_URL` (default `http://localhost:8080`). The default model is `MANIFATURA_MODEL`.
 
 A model is named `provider/model-id`, so `llamacpp/qwen3.5-9b` goes to llama.cpp as `qwen3.5-9b`, and `vllm/qwen3.5-32b` to a server registered as `vllm`. The model comes from, in order: the session (`Session::set_model`), the agent (`Agent::model`), the runtime (`RuntimeBuilder::model`), then the provider's default.
 
 Other OpenAI-compatible servers (vLLM, hosted APIs) register by name, in code or from an app's config file:
 
 ```rust
-use manifatura::models::{Models, OpenAi};
+use manifatura::providers::{Models, OpenAi};
 
 let models = Models::new()
     .with("vllm", OpenAi::compatible("http://gpu-box:8000/v1"))
@@ -20,7 +20,7 @@ let models = Models::new()
 ```
 
 ```rust
-use manifatura::models::{self, ProviderConfig};
+use manifatura::providers::{self, ProviderConfig};
 
 let config: ProviderConfig = toml::from_str(
     r#"
@@ -30,10 +30,38 @@ let config: ProviderConfig = toml::from_str(
     context_window = 32768
     "#,
 )?;
-let models = models::from_env()?.configure("vllm", &config)?;
+let models = providers::from_env()?.configure("vllm", &config)?;
 ```
 
 The context window is what the loop reports in events and what `kit::compaction::auto` measures against. The registry assumes 8,192 tokens for `llamacpp` and knows nothing of other servers: set it to the server's real window (llama.cpp's `-c`) with `context_window` or `Models::with_info`.
+
+## OpenAI's Responses API and Sign in with ChatGPT
+
+With the `providers-responses` feature, `providers::responses::Responses` speaks OpenAI's Responses API. It is stateless (`store: false`, the whole conversation in every request) and sends reasoning back as the encrypted items the API returned. Its bearer token comes from a key or from `Credentials`, a trait for tokens that refresh:
+
+```rust
+use manifatura::providers::responses::Responses;
+
+let provider = Responses::new("https://api.openai.com/v1").key(openai_key);
+```
+
+The `auth` feature (the `manifatura-auth` crate) adds sign-ins that supply those credentials. `auth::openai::SignIn` is OpenAI's Sign in with ChatGPT, so an agent's requests run on the user's ChatGPT plan rather than an API key. The app registers itself on the first sign-in, the browser returns to a callback on `127.0.0.1`, and the tokens are kept in one owner-only file per app:
+
+```rust
+use manifatura::auth::openai::{SignIn, USAGE_URL};
+
+let sign_in = SignIn::new("my-app", SignIn::default_path("my-app"));
+if sign_in.account().is_none() {
+    let login = sign_in.login().await?;
+    println!("Open {}", login.url());
+    login.finish().await?;
+}
+let model = sign_in.models().await?[0].slug.clone(); // the models the plan offers
+let rt = Runtime::builder().provider(sign_in.provider()).model(model).build();
+println!("Using ChatGPT plan · Manage usage: {USAGE_URL}"); // as OpenAI's guidelines ask
+```
+
+`examples/sign-in.rs` signs in, lists the models and asks one.
 
 ## Errors
 

@@ -1,10 +1,11 @@
 //! Model providers behind one `provider/model-id` registry: llama.cpp, built in, and any other
-//! server speaking OpenAI-compatible Chat Completions, streamed over SSE.
+//! server speaking OpenAI-compatible Chat Completions, streamed over SSE. With the `responses`
+//! feature, [`responses`] speaks OpenAI's Responses API.
 //!
 //! ```no_run
-//! # fn demo() -> Result<(), manifatura_models::ModelsError> {
+//! # fn demo() -> Result<(), manifatura_providers::ModelsError> {
 //! // LLAMACPP_URL, MANIFATURA_MODEL
-//! let models = manifatura_models::from_env()?;
+//! let models = manifatura_providers::from_env()?;
 //! # Ok(()) }
 //! ```
 

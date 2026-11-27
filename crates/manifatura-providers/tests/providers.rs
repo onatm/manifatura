@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use manifatura_agent::*;
-use manifatura_models::{Models, OpenAi};
+use manifatura_providers::{Models, OpenAi};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -327,7 +327,7 @@ fn model_info_prefers_overrides_then_catalog() {
 #[cfg(feature = "responses")]
 mod responses {
     use super::*;
-    use manifatura_models::responses::{BearerFuture, Credentials, Responses};
+    use manifatura_providers::responses::{BearerFuture, Credentials, Responses};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Hands out `t0`, then `t1` after a refusal.

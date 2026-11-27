@@ -23,12 +23,12 @@ cargo add schemars
 ## An agent that answers
 
 ```rust
-use manifatura::{Agent, Event, Runtime, SessionId, models};
+use manifatura::{Agent, Event, Runtime, SessionId, providers};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = Agent::new("You are concise.");
-    let rt = Runtime::builder().provider(models::from_env()?).build();
+    let rt = Runtime::builder().provider(providers::from_env()?).build();
 
     let session = rt.session(&agent, SessionId::new());
     let mut turn = session.prompt("Why is the sky blue?").await?;
@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 MANIFATURA_MODEL=llamacpp/qwen3.5-9b cargo run
 ```
 
-`models::from_env()` registers llama.cpp as `llamacpp`, at `LLAMACPP_URL` (default `http://localhost:8080`), and takes the default model from `MANIFATURA_MODEL`. An agent can name its own with `Agent::model("llamacpp/qwen3.5-9b")`.
+`providers::from_env()` registers llama.cpp as `llamacpp`, at `LLAMACPP_URL` (default `http://localhost:8080`), and takes the default model from `MANIFATURA_MODEL`. An agent can name its own with `Agent::model("llamacpp/qwen3.5-9b")`.
 
 `prompt` queues a turn and returns at once. `next_event` streams what happens in it, and `wait` returns the final reply, or the error the turn failed with. Turns of one session run one after another.
 
@@ -84,10 +84,10 @@ By default sessions live in memory. A `JsonlStore` keeps each one in a file, so 
 
 ```rust
 use manifatura::store::JsonlStore;
-use manifatura::{Runtime, SessionId, models};
+use manifatura::{Runtime, SessionId, providers};
 
 let rt = Runtime::builder()
-    .provider(models::from_env()?)
+    .provider(providers::from_env()?)
     .store(JsonlStore::new("sessions")?)
     .build();
 

@@ -116,7 +116,7 @@ Tools act through an `Env`: run a command, read, write, list and remove files. T
 let env = tools::Local::new("/srv/checkouts/shop")?
     .pass_env("GH_TOKEN")               // from this process's environment
     .set_env("CI", "true");
-let rt = Runtime::builder().provider(models::from_env()?).env(env).build();
+let rt = Runtime::builder().provider(providers::from_env()?).env(env).build();
 ```
 
 A sandbox, a container or a remote machine is another `Env` implementation; the tools do not change. Paths the model gives resolve against the env's working directory, and `Local` does not stop them leaving it: isolation belongs to the env.

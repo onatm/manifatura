@@ -3,10 +3,10 @@ resolver = "3"
 members = [
     "crates/manifatura",
     "crates/manifatura-agent",
-    "crates/manifatura-chatgpt",
+    "crates/manifatura-auth",
     "crates/manifatura-kit",
     "crates/manifatura-mcp",
-    "crates/manifatura-models",
+    "crates/manifatura-providers",
     "crates/manifatura-skills",
     "crates/manifatura-store",
     "crates/manifatura-subagents",
@@ -27,14 +27,14 @@ categories = ["asynchronous", "development-tools"]
 [workspace.dependencies]
 manifatura = { version = "0.3.0", path = "crates/manifatura" }
 manifatura-agent = { version = "0.3.0", path = "crates/manifatura-agent" }
+manifatura-auth = { version = "0.3.0", path = "crates/manifatura-auth" }
 manifatura-kit = { version = "0.3.0", path = "crates/manifatura-kit" }
 manifatura-mcp = { version = "0.3.0", path = "crates/manifatura-mcp" }
-manifatura-models = { version = "0.3.0", path = "crates/manifatura-models", default-features = false }
+manifatura-providers = { version = "0.3.0", path = "crates/manifatura-providers", default-features = false }
 manifatura-skills = { version = "0.3.0", path = "crates/manifatura-skills" }
 manifatura-store = { version = "0.3.0", path = "crates/manifatura-store" }
 manifatura-subagents = { version = "0.3.0", path = "crates/manifatura-subagents" }
 manifatura-tools = { version = "0.3.0", path = "crates/manifatura-tools" }
-manifatura-chatgpt = { version = "0.3.0", path = "crates/manifatura-chatgpt" }
 async-trait = "0.1.92"
 futures-util = { version = "0.3.34", default-features = false, features = ["std", "alloc"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "stream"] }

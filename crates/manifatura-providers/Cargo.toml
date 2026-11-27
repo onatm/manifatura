@@ -1,6 +1,6 @@
 [package]
-name = "manifatura-models"
-description = "Model providers for manifatura: llama.cpp and other OpenAI-compatible servers."
+name = "manifatura-providers"
+description = "Model providers for manifatura: llama.cpp and other OpenAI-compatible servers, and OpenAI's Responses API."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-documentation = "https://docs.rs/manifatura-models"
+documentation = "https://docs.rs/manifatura-providers"
 
 [features]
 default = ["openai"]

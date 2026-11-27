@@ -260,7 +260,7 @@ impl ToolChoice {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ModelRequest {
-    /// Model id. Through `manifatura-models`' `Models` this is `provider/model-id`; a
+    /// Model id. Through `manifatura-providers`' `Models` this is `provider/model-id`; a
     /// concrete provider receives only the model id.
     pub model: String,
     /// The system prompt; empty for none.
