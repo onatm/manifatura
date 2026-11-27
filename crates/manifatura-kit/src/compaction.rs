@@ -83,17 +83,14 @@ impl Compactor for Summarizer {
         if let Some(f) = plan.focus.as_deref().filter(|f| !f.trim().is_empty()) {
             ask.push_str(&format!("\n\nPay particular attention to: {f}"));
         }
-        let req = ModelRequest {
-            model: self.model.clone().unwrap_or_else(|| cx.model().to_string()),
-            system: SUMMARY_PROMPT.into(),
-            messages: vec![Message::user(ask)],
-            tools: Vec::new(),
-            max_tokens: Some(
-                info.map(|i| i.max_output.min(self.max_tokens))
-                    .unwrap_or(self.max_tokens),
-            ),
-            reasoning: Some(Effort::Off),
-        };
+        let model = self.model.clone().unwrap_or_else(|| cx.model().to_string());
+        let max_tokens = info
+            .map(|i| i.max_output.min(self.max_tokens))
+            .unwrap_or(self.max_tokens);
+        let req = ModelRequest::new(model, vec![Message::user(ask)])
+            .system(SUMMARY_PROMPT)
+            .max_tokens(max_tokens)
+            .reasoning(Effort::Off);
         let mut stream = cx.provider().stream(req, cx.abort().clone());
         while let Some(ev) = stream.next().await {
             if let StreamEvent::Done(r) = ev {

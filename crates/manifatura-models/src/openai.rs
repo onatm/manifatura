@@ -99,6 +99,9 @@ pub(crate) fn body(req: &ModelRequest, openai: bool) -> Value {
                     "name": t.name, "description": t.description, "parameters": t.input_schema } })
             })
             .collect();
+        if !req.tool_choice.is_auto() {
+            b["tool_choice"] = json!(req.tool_choice.as_str());
+        }
     }
     if let Some(n) = req.max_tokens {
         // api.openai.com rejects `max_tokens` for reasoning models; other servers expect it.
@@ -332,5 +335,26 @@ impl OpenAi {
             (ReadEnd::Eof | ReadEnd::Stopped, _) => None,
         };
         http::finish(&tx, acc.finish(end)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifatura_agent::{ToolChoice, ToolSpec};
+
+    #[test]
+    fn tool_choice_is_sent_only_with_tools() {
+        let mut req =
+            ModelRequest::new("m", vec![Message::user("hi")]).tool_choice(ToolChoice::Off);
+        assert!(body(&req, false).get("tool_choice").is_none());
+        req.tools.push(ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            input_schema: json!({"type": "object"}),
+        });
+        assert_eq!(body(&req, false)["tool_choice"], "none");
+        req.tool_choice = ToolChoice::Auto;
+        assert!(body(&req, false).get("tool_choice").is_none());
     }
 }

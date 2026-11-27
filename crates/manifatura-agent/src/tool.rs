@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::agent::Agent;
 use crate::env::Env;
 use crate::provider::Abort;
 use crate::record::SessionId;
@@ -404,6 +405,7 @@ pub struct ToolCx {
     pub(crate) log: Arc<dyn Fn(String) + Send + Sync>,
     pub(crate) env: Arc<dyn Env>,
     pub(crate) runtime: Runtime,
+    pub(crate) agent: Agent,
 }
 
 impl std::fmt::Debug for ToolCx {
@@ -427,6 +429,7 @@ impl ToolCx {
             log: Arc::new(|_| {}),
             env: crate::env::no_env_arc(),
             runtime: Runtime::builder().build(),
+            agent: Agent::new(""),
         }
     }
 
@@ -456,6 +459,11 @@ impl ToolCx {
         &self.runtime
     }
 
+    /// The agent of the session the call runs in, e.g. for a tool that opens a session like it.
+    pub fn agent(&self) -> &Agent {
+        &self.agent
+    }
+
     /// Fires when the turn is aborted; long-running tools should stop early.
     pub fn abort(&self) -> &Abort {
         &self.abort
@@ -474,6 +482,16 @@ impl ToolCx {
             return None;
         }
         serde_json::from_value(v).ok()
+    }
+
+    /// Every state key and its value, as [`state`](Self::state) reads them.
+    pub fn state_map(&self) -> BTreeMap<String, Value> {
+        let mut map = (*self.state).clone();
+        for (k, v) in self.writes.lock().unwrap().iter() {
+            map.insert(k.clone(), v.clone());
+        }
+        map.retain(|_, v| !v.is_null());
+        map
     }
 
     /// Writes session state. The write is recorded with the tool batch; parallel writes to one

@@ -213,13 +213,57 @@ impl Effort {
     }
 }
 
+/// Whether the model may call the tools offered in a request.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ToolChoice {
+    /// The model decides: what a provider does when it is told nothing.
+    #[default]
+    Auto,
+    /// No tool calls: the model answers in text. The tools are still declared, so a provider's
+    /// cached prompt prefix still matches.
+    Off,
+}
+
+impl ToolChoice {
+    /// The name OpenAI-compatible APIs use: `auto` or `none`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolChoice::Auto => "auto",
+            ToolChoice::Off => "none",
+        }
+    }
+
+    /// Whether it is [`ToolChoice::Auto`], which a provider need not send.
+    pub fn is_auto(&self) -> bool {
+        *self == ToolChoice::Auto
+    }
+}
+
 /// One model call, as a provider receives it.
+///
+/// Build one with [`ModelRequest::new`] and the setters for what the call uses, so a call
+/// without tools never mentions them. The fields are public: providers read them, hooks change
+/// them, and a value that is already an `Option` (an agent's output limit, say) is assigned to
+/// its field directly.
+///
+/// ```
+/// use manifatura_agent::{Effort, Message, ModelRequest};
+///
+/// let req = ModelRequest::new("local/model", vec![Message::user("Summarise this.")])
+///     .system("You write short summaries.")
+///     .max_tokens(512)
+///     .reasoning(Effort::Off);
+/// assert!(req.tools.is_empty());
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ModelRequest {
     /// Model id. Through `manifatura-models`' `Models` this is `provider/model-id`; a
     /// concrete provider receives only the model id.
     pub model: String,
-    /// The system prompt.
+    /// The system prompt; empty for none.
     pub system: String,
     /// The conversation so far, oldest first.
     pub messages: Vec<Message>,
@@ -229,6 +273,56 @@ pub struct ModelRequest {
     pub max_tokens: Option<u32>,
     /// How much to reason; `None` leaves it to the model.
     pub reasoning: Option<Effort>,
+    /// Whether the model may call the tools. A [`Request`](crate::hook::Request) hook sets it
+    /// for one call; a provider that cannot keep a model from calling tools may ignore it.
+    #[serde(default, skip_serializing_if = "ToolChoice::is_auto")]
+    pub tool_choice: ToolChoice,
+}
+
+impl ModelRequest {
+    /// A request for `model` with this conversation: no system prompt, no tools, and output
+    /// length and reasoning left to the provider.
+    pub fn new(model: impl Into<String>, messages: Vec<Message>) -> Self {
+        Self {
+            model: model.into(),
+            system: String::new(),
+            messages,
+            tools: Vec::new(),
+            max_tokens: None,
+            reasoning: None,
+            tool_choice: ToolChoice::Auto,
+        }
+    }
+
+    /// The system prompt.
+    pub fn system(mut self, text: impl Into<String>) -> Self {
+        self.system = text.into();
+        self
+    }
+
+    /// The tools offered.
+    pub fn tools(mut self, tools: Vec<ToolSpec>) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    /// The most output tokens to produce.
+    pub fn max_tokens(mut self, n: u32) -> Self {
+        self.max_tokens = Some(n);
+        self
+    }
+
+    /// How much to reason.
+    pub fn reasoning(mut self, effort: Effort) -> Self {
+        self.reasoning = Some(effort);
+        self
+    }
+
+    /// Whether the model may call the tools.
+    pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
+        self.tool_choice = choice;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

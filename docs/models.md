@@ -52,7 +52,7 @@ let agent = Agent::new("…").on(|e: hook::ModelError, _cx| async move {
 
 ## Writing a provider
 
-A provider streams a reply to a `ModelRequest`: the model name, the system prompt, the messages, the tools offered, an output limit and a reasoning effort. The stream yields text and reasoning as it comes, and ends with exactly one `StreamEvent::Done` carrying the whole reply. Failures are reported in `Done`, as `StopReason::Error`, never as a broken stream.
+A provider streams a reply to a `ModelRequest`: the model name, the system prompt, the messages, the tools offered, an output limit, a reasoning effort, and whether the model may call the tools (`tool_choice`: `ToolChoice::Auto` by default, `ToolChoice::Off` for text only with the tools still declared). A provider that cannot keep a model from calling tools may ignore it. To make a request yourself, use `ModelRequest::new(model, messages)` and the setters for what the call uses: `system`, `tools`, `max_tokens`, `reasoning`, `tool_choice`. The stream yields text and reasoning as it comes, and ends with exactly one `StreamEvent::Done` carrying the whole reply. Failures are reported in `Done`, as `StopReason::Error`, never as a broken stream.
 
 ```rust
 use manifatura::{

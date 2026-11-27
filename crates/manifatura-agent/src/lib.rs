@@ -53,7 +53,7 @@ pub use tool::{
 };
 pub use types::{
     Content, Effort, ErrorKind, Message, ModelInfo, ModelRequest, ProviderError, Response, Role,
-    StopReason, StreamEvent, ToolCall, ToolSpec, Usage, system_note_text,
+    StopReason, StreamEvent, ToolCall, ToolChoice, ToolSpec, Usage, system_note_text,
 };
 
 pub use async_trait::async_trait;

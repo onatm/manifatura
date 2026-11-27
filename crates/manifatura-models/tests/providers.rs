@@ -108,37 +108,34 @@ async fn read_request(sock: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
 }
 
 fn request() -> ModelRequest {
-    ModelRequest {
-        model: "m".into(),
-        system: "Be brief.".into(),
-        messages: vec![
-            Message::user("look up 42"),
-            Message::new(
-                Role::Assistant,
-                vec![Content::ToolCall {
-                    id: "t0".into(),
-                    name: "lookup".into(),
-                    input: json!({"id": "1"}),
-                }],
-            ),
-            Message::new(
-                Role::Tool,
-                vec![Content::ToolResult {
-                    call_id: "t0".into(),
-                    output: "nothing".into(),
-                    is_error: true,
-                }],
-            ),
-            Message::system_note("Tools now available: refund."),
-        ],
-        tools: vec![ToolSpec {
+    let messages = vec![
+        Message::user("look up 42"),
+        Message::new(
+            Role::Assistant,
+            vec![Content::ToolCall {
+                id: "t0".into(),
+                name: "lookup".into(),
+                input: json!({"id": "1"}),
+            }],
+        ),
+        Message::new(
+            Role::Tool,
+            vec![Content::ToolResult {
+                call_id: "t0".into(),
+                output: "nothing".into(),
+                is_error: true,
+            }],
+        ),
+        Message::system_note("Tools now available: refund."),
+    ];
+    ModelRequest::new("m", messages)
+        .system("Be brief.")
+        .tools(vec![ToolSpec {
             name: "lookup".into(),
             description: "Look up.".into(),
             input_schema: json!({"type": "object"}),
-        }],
-        max_tokens: Some(100),
-        reasoning: None,
-    }
+        }])
+        .max_tokens(100)
 }
 
 async fn collect(p: &dyn Provider, req: ModelRequest) -> (Vec<StreamEvent>, Response) {

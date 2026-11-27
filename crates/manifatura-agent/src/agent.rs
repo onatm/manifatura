@@ -85,6 +85,14 @@ impl Agent {
         self
     }
 
+    /// Adds a bundle of hooks before the ones already added (still after the runtime's): for a
+    /// policy that must decide first, such as refusing a call before an approval hook asks
+    /// about it.
+    pub fn hooks_first(mut self, hooks: Hooks) -> Self {
+        self.hooks = hooks.and(std::mem::take(&mut self.hooks));
+        self
+    }
+
     /// The environment for this agent's tools, instead of the runtime's.
     pub fn env(mut self, env: impl Env + 'static) -> Self {
         self.env = Some(Arc::new(env));

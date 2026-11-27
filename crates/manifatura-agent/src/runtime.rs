@@ -460,6 +460,16 @@ impl Session {
         &self.shared.id
     }
 
+    /// The agent the session was opened with.
+    pub fn agent(&self) -> &Agent {
+        &self.shared.agent
+    }
+
+    /// The runtime the session belongs to.
+    pub fn runtime(&self) -> Runtime {
+        Runtime::from_inner(self.shared.rt.clone())
+    }
+
     /// Queues a turn for `input`. Turns of one session run in order.
     pub async fn prompt(&self, input: impl Into<String>) -> Result<Turn, Error> {
         self.shared.init().await?;

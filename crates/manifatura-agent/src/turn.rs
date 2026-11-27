@@ -181,14 +181,11 @@ async fn body(
                 &cx,
             )
             .await;
-        let request = ModelRequest {
-            model,
-            system: s.instructions.clone(),
-            messages: context.messages,
-            tools: specs,
-            max_tokens: agent.max_tokens,
-            reasoning: live.reasoning.or(agent.reasoning),
-        };
+        let mut request = ModelRequest::new(model, context.messages)
+            .system(s.instructions.clone())
+            .tools(specs);
+        request.max_tokens = agent.max_tokens;
+        request.reasoning = live.reasoning.or(agent.reasoning);
         let request = shared
             .hooks
             .run(hook::Request { request }, &cx)
@@ -518,6 +515,7 @@ async fn run_one(
         writes: writes.clone(),
         env: shared.env().clone(),
         runtime: Runtime::from_inner(shared.rt.clone()),
+        agent: shared.agent.clone(),
         log: {
             let events = shared.events.clone();
             let (turn, call_id) = (turn.to_string(), call.id.clone());
