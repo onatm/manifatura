@@ -281,6 +281,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -774,6 +780,7 @@ dependencies = [
  "manifatura-exec",
  "manifatura-kit",
  "manifatura-mcp",
+ "manifatura-policy",
  "manifatura-providers",
  "manifatura-sandbox",
  "manifatura-skills",
@@ -861,6 +868,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "manifatura-policy"
+version = "0.3.0"
+dependencies = [
+ "manifatura-agent",
+ "manifatura-kit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tree-sitter",
+ "tree-sitter-bash",
 ]
 
 [[package]]
@@ -1420,6 +1440,8 @@ version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash",
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -1550,6 +1572,12 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
 
 [[package]]
 name = "strip-ansi-escapes"
@@ -1801,6 +1829,35 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
 ]
+
+[[package]]
+name = "tree-sitter"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37b2bed8f39a73439f3b0b7ed8f452be5d2911b5e9da69d352ef113bb7448fb8"
+dependencies = [
+ "cc",
+ "regex",
+ "serde_json",
+ "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-bash"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e5ec769279cc91b561d3df0d8a5deb26b0ad40d183127f409494d6d8fc53062"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a"
 
 [[package]]
 name = "try-lock"

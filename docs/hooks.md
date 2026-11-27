@@ -84,6 +84,7 @@ fn audit() -> Hooks {
 | `kit::approve(tools, ask)` | Asks before calls of the named tools. "Always" allows the tool for the session. |
 | `kit::approve_when(check, ask)` | Asks before calls `check` picks out, such as dangerous commands. "Always" allows only the same call again. |
 | `kit::approve_by(check, scope, ask)` | The same, with "always" covering whatever `scope` says: a tool, a command, a server. |
+| `kit::Approvals::gate(check, scope)` | The same, asking through pending requests any client can answer (see [approvals](approvals.md)). |
 | `kit::catalog()` | Deferred tools behind `find_tools` and `run_tool` (see [tools](tools.md)). |
 | `kit::repair()` | Fixes inputs small models get wrong: `"30"` for a number, objects sent as JSON strings, a bare value for a one-field tool. |
 | `kit::compaction::on_overflow(c)`, `auto(t, c)`, `trim_results(n, chars)` | Compaction on overflow, past a threshold, and shorter old tool results (see [sessions](sessions.md)). |
@@ -110,6 +111,8 @@ let agent = Agent::new("…")
         }
     }));
 ```
+
+For questions answered somewhere other than where the hook runs (a web page, another person, a client that reconnects), use `kit::Approvals`, and for rules about which tools and commands may run, `manifatura-policy`: see [approvals](approvals.md).
 
 ### A tool that appears when it is needed
 

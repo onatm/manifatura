@@ -275,6 +275,17 @@ async fn an_escalated_command_runs_outside_the_sandbox() {
         .await;
     assert!(r.contains("session ID 2"), "the failed attempt was 1: {r}");
     assert!(ws.exec.processes(&ws.session)[0].escalated);
+    let typing = |chars: &str| manifatura_agent::ToolCall {
+        id: "c".into(),
+        name: "write_stdin".into(),
+        input: json!({"session_id": 2, "chars": chars}),
+    };
+    assert!(
+        ws.exec
+            .types_into_escalated(&typing("rm -rf ~\n"), &ws.session)
+    );
+    assert!(!ws.exec.types_into_escalated(&typing("\u{3}"), &ws.session));
+    assert!(!ws.exec.types_into_escalated(&typing(""), &ws.session));
     let r = ws.stdin(json!({"session_id": 2})).await;
     assert!(
         r.output.contains("Process exited with code 0"),

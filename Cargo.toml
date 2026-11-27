@@ -7,6 +7,7 @@ members = [
     "crates/manifatura-exec",
     "crates/manifatura-kit",
     "crates/manifatura-mcp",
+    "crates/manifatura-policy",
     "crates/manifatura-providers",
     "crates/manifatura-sandbox",
     "crates/manifatura-skills",
@@ -33,6 +34,7 @@ manifatura-auth = { version = "0.3.0", path = "crates/manifatura-auth" }
 manifatura-exec = { version = "0.3.0", path = "crates/manifatura-exec" }
 manifatura-kit = { version = "0.3.0", path = "crates/manifatura-kit" }
 manifatura-mcp = { version = "0.3.0", path = "crates/manifatura-mcp" }
+manifatura-policy = { version = "0.3.0", path = "crates/manifatura-policy" }
 manifatura-providers = { version = "0.3.0", path = "crates/manifatura-providers", default-features = false }
 manifatura-sandbox = { version = "0.3.0", path = "crates/manifatura-sandbox" }
 manifatura-skills = { version = "0.3.0", path = "crates/manifatura-skills" }

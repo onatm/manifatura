@@ -277,6 +277,20 @@ impl Exec {
         })
     }
 
+    /// Whether `call` types into the terminal of a command running outside the sandbox: what
+    /// it types runs there too, so an approval policy should ask about it as it asks about
+    /// an escalation. Interrupting (`"\u{3}"`) and waiting for output do not count.
+    pub fn types_into_escalated(&self, call: &ToolCall, session: &SessionId) -> bool {
+        let chars = call.input["chars"].as_str().unwrap_or_default();
+        if call.name != STDIN_TOOL || chars.is_empty() || chars == "\u{3}" {
+            return false;
+        }
+        call.input["session_id"]
+            .as_u64()
+            .and_then(|id| self.get(session, u32::try_from(id).ok()?))
+            .is_some_and(|p| p.escalated)
+    }
+
     /// Every command's start and exit, as they happen.
     pub fn subscribe(&self) -> broadcast::Receiver<ExecEvent> {
         self.0.events.subscribe()

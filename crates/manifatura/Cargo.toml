@@ -25,6 +25,7 @@ subagents = ["dep:manifatura-subagents"]
 auth = ["dep:manifatura-auth", "providers-responses"]
 exec = ["dep:manifatura-exec", "manifatura-tools?/pty"]
 sandbox = ["dep:manifatura-sandbox"]
+policy = ["dep:manifatura-policy", "kit"]
 testing = ["manifatura-agent/testing"]
 
 [dependencies]
@@ -33,6 +34,7 @@ manifatura-auth = { workspace = true, optional = true }
 manifatura-exec = { workspace = true, optional = true }
 manifatura-kit = { workspace = true, optional = true }
 manifatura-mcp = { workspace = true, optional = true }
+manifatura-policy = { workspace = true, optional = true }
 manifatura-providers = { workspace = true, optional = true }
 manifatura-sandbox = { workspace = true, optional = true }
 manifatura-skills = { workspace = true, optional = true }
