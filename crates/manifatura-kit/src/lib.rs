@@ -9,6 +9,7 @@
 //! | [`compaction::auto`] | A `StepEnd` hook: compacts past a share of the window |
 //! | [`context`] | `AGENTS.md` files from the repository root down, and a system prompt around them |
 //! | [`approve`], [`approve_when`], [`approve_by`] | A `ToolCall` hook that asks someone first |
+//! | [`Approvals`] | Pending approval requests with ids, answerable from any client |
 //! | [`catalog`] | Deferred tools behind `find_tools` and `run_tool` |
 //! | [`repair`] | Coerces tool inputs to the schema |
 //! | [`system_delta`] | Keeps the first system prompt; later changes become notes |
@@ -37,7 +38,10 @@ pub mod context;
 mod repair;
 mod system_delta;
 
-pub use approve::{Answer, approval_key, approve, approve_by, approve_when, call_scope};
+pub use approve::{
+    Answer, ApprovalEvent, Approvals, Request, approval_key, approve, approve_by, approve_when,
+    call_scope, denial, record,
+};
 pub use catalog::{CALL_TOOL, SEARCH_TOOL, catalog, unwrap_call};
 pub use compaction::Summarizer;
 pub use repair::{repair, repair_input};
