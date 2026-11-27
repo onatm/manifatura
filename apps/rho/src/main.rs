@@ -141,7 +141,7 @@ fn chat(cli: Cli, runtime: tokio::runtime::Runtime) -> Result<()> {
         model: cli.model.or(config.model),
         effort,
         logs: cli.logs,
-        context_window: config.context_window.unwrap_or(272_000),
+        context_window: config.context_window,
     };
     let mcp = mcp::configured(&paths::config_dir().join("mcp.toml"))?;
     let (sink, mut logs) = ui::logs::channel();

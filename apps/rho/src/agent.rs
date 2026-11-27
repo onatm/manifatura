@@ -5,6 +5,7 @@
 //! require_escalated`), and that, typing into a command outside it, and MCP tools ask through the agent's
 //! `Approvals`, unless a rule allows them. Reads, patches inside the workspace, plans and skills never ask.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -14,11 +15,15 @@ use manifatura::exec::Exec;
 use manifatura::kit::context::{ContextFiles, SystemPrompt};
 use manifatura::kit::{self, Approvals, Summarizer};
 use manifatura::policy::{Decision, Policy};
+use manifatura::providers::responses::Responses;
 use manifatura::sandbox::Sandbox;
 use manifatura::skills::{SkillSet, Skills, SystemPromptExt};
 use manifatura::store::JsonlStore;
 use manifatura::tools::Local;
-use manifatura::{Agent, Effort, Env, Message, Runtime, Session, SessionId, SessionMeta, Store};
+use manifatura::{
+    Abort, Agent, BoxStream, Effort, Env, Message, ModelInfo, ModelRequest, Provider, Runtime,
+    Session, SessionId, SessionMeta, Store, StreamEvent,
+};
 
 use crate::paths;
 
@@ -59,8 +64,8 @@ pub(crate) struct ChatOptions {
     pub(crate) effort: Option<Effort>,
     /// Keep the log, behind a button on the screen.
     pub(crate) logs: bool,
-    /// The model's context window, which compaction measures against.
-    pub(crate) context_window: u32,
+    /// The context window compaction measures against, instead of the model's own.
+    pub(crate) context_window: Option<u32>,
 }
 
 /// The agent and its session, set up once rho is connected.
@@ -133,6 +138,18 @@ pub(crate) async fn prepare(
             .map(|m| m.slug.clone())
             .context("your ChatGPT plan lists no models")?,
     };
+    let listed = models.iter().find(|m| m.slug == model);
+    let effort = match (options.effort, listed) {
+        (Some(e), Some(m)) if !m.efforts.is_empty() && !m.efforts.iter().any(|(x, _)| *x == e) => {
+            problems.push(format!(
+                "{model} has no {} effort; it uses its default",
+                effort_label(Some(e))
+            ));
+            m.default_effort
+        }
+        (Some(e), _) => Some(e),
+        (None, m) => m.and_then(|m| m.default_effort),
+    };
 
     let local = Local::new(&cwd)?;
     let env = Arc::new(
@@ -191,14 +208,20 @@ pub(crate) async fn prepare(
     let policy = policy(&cwd, &rules_path, &exec, &mut problems)?;
     let approvals = Approvals::new();
     let summarizer = Arc::new(Summarizer::default());
-    let window = options.context_window;
+    let provider = Catalog::new(sign_in.provider(), &models);
+    let window = options
+        .context_window
+        .or_else(|| provider.window(&model))
+        .unwrap_or(DEFAULT_WINDOW);
     let mut agent = Agent::new(instructions)
         .name(AGENT_NAME)
         .model(model.clone())
-        .context_window(window)
         .max_steps(200)
         .tools(tools);
-    if let Some(effort) = options.effort {
+    if let Some(tokens) = options.context_window {
+        agent = agent.context_window(tokens);
+    }
+    if let Some(effort) = effort {
         agent = agent.reasoning(effort);
     }
     // The catalog goes first, so the hooks after it see the tool a run_tool call stands for.
@@ -214,7 +237,7 @@ pub(crate) async fn prepare(
         .hooks(kit::system_delta());
 
     let runtime = Runtime::builder()
-        .provider(sign_in.provider())
+        .provider(provider)
         .store(store.clone())
         .env(env.clone())
         .build();
@@ -244,7 +267,6 @@ pub(crate) async fn prepare(
     } else {
         Vec::new()
     };
-    let effort = options.effort;
     Ok(Prepared {
         runtime,
         agent,
@@ -316,14 +338,64 @@ fn policy(
     }))
 }
 
-/// Reads `off`, `low`, `medium` or `high`.
+/// The window to assume for a model the catalog gives none for.
+const DEFAULT_WINDOW: u32 = 272_000;
+
+/// The plan's provider, reporting each model's context window from the plan's catalog, so compaction measures
+/// against the model in use after `/model` too.
+struct Catalog {
+    inner: Responses,
+    windows: HashMap<String, u32>,
+}
+
+impl Catalog {
+    fn new(inner: Responses, models: &[Model]) -> Self {
+        let windows = models
+            .iter()
+            .filter_map(|m| Some((m.slug.clone(), m.context_window?)))
+            .collect();
+        Self { inner, windows }
+    }
+
+    fn window(&self, model: &str) -> Option<u32> {
+        self.windows.get(model).copied()
+    }
+}
+
+impl Provider for Catalog {
+    fn stream(&self, req: ModelRequest, abort: Abort) -> BoxStream<'static, StreamEvent> {
+        self.inner.stream(req, abort)
+    }
+
+    fn model_info(&self, model: &str) -> Option<ModelInfo> {
+        let context_window = self.window(model)?;
+        // Only a compaction's summary is held to it.
+        Some(ModelInfo {
+            context_window,
+            max_output: 32_000,
+        })
+    }
+}
+
+/// Reads an effort: `off`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`.
 pub(crate) fn parse_effort(text: &str) -> Result<Effort, String> {
-    match text.trim().to_lowercase().as_str() {
-        "off" | "none" => Ok(Effort::Off),
-        "low" => Ok(Effort::Low),
-        "medium" => Ok(Effort::Medium),
-        "high" => Ok(Effort::High),
-        other => Err(format!("no effort {other}: use off, low, medium or high")),
+    Effort::parse(text).ok_or_else(|| {
+        format!(
+            "no effort {}: use off, low, medium, high, xhigh, max or ultra",
+            text.trim()
+        )
+    })
+}
+
+/// The efforts `model` accepts, from the least, with the catalog's descriptions; off, low, medium and high for a
+/// model the catalog lists none for.
+pub(crate) fn efforts(models: &[Model], model: &str) -> Vec<(Effort, String)> {
+    match models.iter().find(|m| m.slug == model) {
+        Some(m) if !m.efforts.is_empty() => m.efforts.clone(),
+        _ => [Effort::Off, Effort::Low, Effort::Medium, Effort::High]
+            .into_iter()
+            .map(|e| (e, String::new()))
+            .collect(),
     }
 }
 
@@ -428,7 +500,8 @@ mod tests {
     fn efforts_read_and_print() {
         assert_eq!(parse_effort("High"), Ok(Effort::High));
         assert_eq!(parse_effort("none"), Ok(Effort::Off));
-        assert!(parse_effort("max").is_err());
+        assert_eq!(parse_effort("xhigh"), Ok(Effort::XHigh));
+        assert!(parse_effort("extreme").is_err());
         assert_eq!(effort_label(None), "default");
         assert_eq!(effort_label(Some(Effort::Medium)), "medium");
     }

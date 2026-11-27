@@ -36,7 +36,9 @@ use self::approval::Ask;
 use self::logs::{LogLine, Logs};
 use self::screen::ChatScreen;
 use self::view::{Activity, Item, Level, View, dim, tokens};
-use crate::agent::{ChatOptions, Prepared, ago, effort_label, parse_effort, recent_sessions};
+use crate::agent::{
+    ChatOptions, Prepared, ago, effort_label, efforts, parse_effort, recent_sessions,
+};
 
 const SPINNER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 const KEPT_LOG_LINES: usize = 200;
@@ -54,7 +56,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     (
         "/effort",
         "[level]",
-        "how much the model reasons: off, low, medium, high",
+        "how much the model reasons, from the levels it has",
     ),
     ("/ps", "", "the commands running in the background"),
     ("/kill", "<id>", "stop a background command"),
@@ -69,13 +71,6 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("/skills", "", "the skills; start one with /name [request]"),
     ("/help", "", "what the keys and commands do"),
     ("/exit", "", "quit"),
-];
-/// The reasoning levels, for `/effort`.
-const EFFORTS: &[(&str, &str)] = &[
-    ("off", "answer without reasoning"),
-    ("low", "reason a little"),
-    ("medium", "reason some"),
-    ("high", "reason much"),
 ];
 const MAX_COMPLETIONS: usize = 8;
 
@@ -144,19 +139,25 @@ struct App {
 }
 
 /// What a one-line input could complete to: the commands and skills it begins, or after `/resume `, the sessions.
-fn completions(line: &str, sessions: &[SessionMeta], skills: &[Skill]) -> Vec<Completion> {
+fn completions(
+    line: &str,
+    sessions: &[SessionMeta],
+    skills: &[Skill],
+    levels: &[(Effort, String)],
+) -> Vec<Completion> {
     if !line.starts_with('/') {
         return Vec::new();
     }
     if let Some(partial) = line.strip_prefix("/effort ") {
         let partial = partial.trim().to_lowercase();
-        return EFFORTS
+        return levels
             .iter()
+            .map(|(effort, about)| (effort_label(Some(*effort)), about))
             .filter(|(level, _)| level.starts_with(&partial) && *level != partial)
             .map(|(level, about)| Completion {
                 text: format!("/effort {level}"),
-                label: (*level).to_owned(),
-                about: (*about).to_owned(),
+                label: level,
+                about: about.clone(),
                 runs: true,
             })
             .collect();
@@ -722,7 +723,8 @@ impl App {
                     .ready
                     .as_ref()
                     .map_or(&[][..], |ready| ready.skills.skills());
-                completions(line, &self.sessions, skills)
+                let levels = self.efforts();
+                completions(line, &self.sessions, skills, &levels)
             }
             _ => Vec::new(),
         }
@@ -974,6 +976,29 @@ impl App {
                         Ok(()) => {
                             self.model = argument.to_owned();
                             self.view.notice(Level::Info, format!("model {argument}"));
+                            // An effort the new model does not have becomes its default.
+                            let levels = efforts(&ready.models, argument);
+                            let kept = self
+                                .effort
+                                .is_none_or(|e| levels.iter().any(|(l, _)| *l == e));
+                            let default = ready
+                                .models
+                                .iter()
+                                .find(|m| m.slug == argument)
+                                .and_then(|m| m.default_effort);
+                            if !kept
+                                && let Some(default) = default
+                                && ready.session.set_reasoning(default).await.is_ok()
+                            {
+                                self.effort = Some(default);
+                                self.view.notice(
+                                    Level::Info,
+                                    format!(
+                                        "effort {}, {argument}'s default",
+                                        effort_label(self.effort)
+                                    ),
+                                );
+                            }
                         }
                         Err(error) => self
                             .view
@@ -984,13 +1009,35 @@ impl App {
             "/effort" if argument.is_empty() => {
                 self.view.notice(
                     Level::Info,
-                    format!(
-                        "effort is {}; set it with /effort off|low|medium|high",
-                        effort_label(self.effort)
-                    ),
+                    format!("effort is {}", effort_label(self.effort)),
                 );
+                for (effort, about) in efforts(&ready.models, &self.model) {
+                    let mark = if Some(effort) == self.effort {
+                        "● "
+                    } else {
+                        "  "
+                    };
+                    self.view.notice(
+                        Level::Info,
+                        format!("{mark}{:<8}{about}", effort_label(Some(effort))),
+                    );
+                }
             }
             "/effort" => match parse_effort(argument) {
+                Ok(effort)
+                    if !efforts(&ready.models, &self.model)
+                        .iter()
+                        .any(|(e, _)| *e == effort) =>
+                {
+                    self.view.notice(
+                        Level::Warn,
+                        format!(
+                            "{} has no {} effort; /effort lists its levels",
+                            self.model,
+                            effort_label(Some(effort))
+                        ),
+                    );
+                }
                 Ok(effort) => match ready.session.set_reasoning(effort).await {
                     Ok(()) => {
                         self.effort = Some(effort);
@@ -1120,6 +1167,14 @@ impl App {
         }
     }
 
+    /// The current model's effort levels.
+    fn efforts(&self) -> Vec<(Effort, String)> {
+        match &self.ready {
+            Some(ready) => efforts(&ready.models, &self.model),
+            None => efforts(&[], &self.model),
+        }
+    }
+
     fn effort_label(&self) -> String {
         effort_label(self.effort)
     }
@@ -1168,7 +1223,7 @@ mod tests {
             model: Some("gpt-test".into()),
             effort: Some(Effort::High),
             logs: false,
-            context_window: 272_000,
+            context_window: None,
         };
         App::new(PathBuf::from("."), &options)
     }
@@ -1429,7 +1484,7 @@ mod tests {
             agent: None,
         });
         let names = |line: &str| -> Vec<String> {
-            completions(line, &sessions, &[])
+            completions(line, &sessions, &[], &efforts(&[], "m"))
                 .into_iter()
                 .map(|c| c.text)
                 .collect()
@@ -1455,8 +1510,8 @@ mod tests {
         );
         assert!(names("hello").is_empty() && names("/compact focus").is_empty());
         assert!(
-            completions("/new", &sessions, &[])[0].runs
-                && !completions("/compact", &sessions, &[])[0].runs
+            completions("/new", &sessions, &[], &[])[0].runs
+                && !completions("/compact", &sessions, &[], &[])[0].runs
         );
         assert_eq!(names("/effort o"), ["/effort off"]);
         assert_eq!(names("/effort m"), ["/effort medium"]);
@@ -1471,7 +1526,7 @@ mod tests {
             .unwrap()
         };
         let skills = [skill("codebase-tour"), skill("status")];
-        let found = completions("/", &[], &skills);
+        let found = completions("/", &[], &skills, &[]);
         let tour = found
             .iter()
             .find(|c| c.text == "/codebase-tour ")
@@ -1486,7 +1541,7 @@ mod tests {
             "the command wins"
         );
         assert_eq!(
-            completions("/co", &[], &skills)
+            completions("/co", &[], &skills, &[])
                 .iter()
                 .map(|c| c.text.as_str())
                 .collect::<Vec<_>>(),
