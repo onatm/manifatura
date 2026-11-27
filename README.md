@@ -49,8 +49,8 @@ async fn ask(call: ToolCall) -> kit::Answer {
 - **Deferred tools.** Tools marked deferred stay out of the prompt, and `kit::catalog` lets the model search for them and run them. Useful with MCP servers that bring dozens of tools.
 - **`AGENTS.md` context.** `kit::context` finds `AGENTS.md` (or `CLAUDE.md`) files from the repository root down, and builds a system prompt from them and the tools' own guidelines.
 - **Skills.** `skills` loads [Agent Skills](https://agentskills.io) from `.agents/skills`, your own directories or the binary itself. The prompt lists them, the model loads one with the `skill` tool when a task calls for it, and your UI can start one with `/name`.
-- **Subagents.** `subagents` gives the model a `task` tool that hands a self-contained task to another agent, or to a copy of itself, in a child session, and returns only its report. Approvals are shared with the caller, and subagents nest as deep as you allow.
-- **Small.** About 10,000 lines across nine crates, a core that depends on `serde`, `tokio` and little else, and a facade that puts each block behind a feature.
+- **Subagents.** `subagents` gives the model a `task` tool that hands a self-contained task to another agent, or to a copy of itself, in a child session, and returns only its report. A subagent can be limited to some tools and a number of steps, keeping its last step for the report; it can be written as Markdown, and your app can start one itself, as with a `/explore` command. Approvals are shared with the caller, and subagents nest as deep as you allow.
+- **Small.** About 11,000 lines across nine crates, a core that depends on `serde`, `tokio` and little else, and a facade that puts each block behind a feature.
 
 ## Install
 
@@ -143,11 +143,11 @@ The guides are on [manifatura.dev](https://manifatura.dev), and in [`docs/`](doc
 
 ## Used by
 
-- [rustling](https://github.com/onatm/rustling): an inference engine for Apple silicon whose `chat` command is a manifatura agent, with the model running in the same process through its own `Provider`, and skills built into the binary or kept in a project's `.rustling/skills`.
+- [rustling](https://github.com/onatm/rustling): an inference engine for Apple silicon whose `chat` command is a manifatura agent, with the model running in the same process through its own `Provider`, skills built into the binary or kept in a project's `.rustling/skills`, and an `explore` subagent that the model or `/explore` starts to search the code.
 
 ## Status
 
-manifatura is young: 0.x releases may change the API. It has no durability: a session survives a restart, but a turn that was running when the process died does not, and tool calls it left without results are marked as interrupted. There are no subagents yet. The core, kit and store reach files, processes and the clock only through `Env`, `Store` and `Provider`, so they can be hosted in WebAssembly later.
+manifatura is young: 0.x releases may change the API. It has no durability: a session survives a restart, but a turn that was running when the process died does not, and tool calls it left without results are marked as interrupted. The core, kit and store reach files, processes and the clock only through `Env`, `Store` and `Provider`, so they can be hosted in WebAssembly later.
 
 ## Acknowledgements
 

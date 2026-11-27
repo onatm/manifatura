@@ -726,7 +726,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "manifatura"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "manifatura-agent",
  "manifatura-kit",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-agent"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -755,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-examples"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "manifatura",
  "schemars",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-kit"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-mcp"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "manifatura-agent",
  "reqwest",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-models"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "futures-util",
  "manifatura-agent",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-skills"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "manifatura-agent",
@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-store"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "manifatura-agent",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-subagents"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "manifatura-agent",
@@ -840,7 +840,7 @@ dependencies = [
 
 [[package]]
 name = "manifatura-tools"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "globset",

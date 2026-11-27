@@ -2,7 +2,7 @@
 
 All notable changes are recorded here. The project follows [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the API.
 
-## Unreleased
+## 0.3.0
 
 - `manifatura-subagents`, new, as `manifatura::subagents` behind the `subagents` feature (off by default): a `task` tool that runs a subagent in a child session and returns its report. A subagent is an agent of its own or the calling session's agent with a brief (`Subagent::like_parent`), so it reuses the parent's prompt cache; it can also be written as Markdown (`Definition`). Approvals are shared both ways, nesting is limited (`max_depth`, 1 by default), aborting the parent aborts the child, and child events reach `action.log` and `Subagents::on_event`. `Subagents::run` starts a subagent from the app, as a task call would. `Subagent::tools` (or `tools:` in Markdown) limits the tools a child may call, keeping its prompt; `Subagent::max_steps` caps its model calls and keeps the last for its report.
 - `manifatura-agent`: `ToolCx::agent`, the agent of the session a tool runs in, and `ToolCx::state_map`, every state key as the tool sees it; `Session::agent` and `Session::runtime`; `Agent::hooks_first`, for hooks that must decide before the others; `ModelRequest::tool_choice` (`ToolChoice::Auto` by default, or `ToolChoice::Off` for no tool calls), which `manifatura-models` sends as `tool_choice: "none"`. `ModelRequest` is `#[non_exhaustive]`: build one with `ModelRequest::new(model, messages)` and the setters `system`, `tools`, `max_tokens`, `reasoning` and `tool_choice`, so a call without tools never mentions them and later fields break no caller. Its fields stay public for providers and hooks.
