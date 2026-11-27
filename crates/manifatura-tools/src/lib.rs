@@ -1,4 +1,5 @@
-//! The basic tools: `read`, `edit`, `grep`, `glob` and `bash`. Each acts through the session's [`Env`], so
+//! The basic tools: `read`, `edit`, `grep`, `glob` and `bash`, and `apply_patch`, which edits
+//! with a patch instead of `edit`'s replacements. Each acts through the session's [`Env`], so
 //! the same tools run wherever the env points: locally, in a sandbox, or on a host that
 //! implements it. [`Local`] (`local` feature, on by default) is the env on this machine.
 //!
@@ -17,6 +18,7 @@ mod bash;
 mod files;
 #[cfg(feature = "local")]
 mod local;
+mod patch;
 mod script;
 mod search;
 pub mod truncate;
@@ -30,11 +32,12 @@ pub use bash::bash;
 pub use files::{FileTracker, edit, read};
 #[cfg(feature = "local")]
 pub use local::Local;
+pub use patch::{GRAMMAR as PATCH_GRAMMAR, apply_patch};
 pub use script::ScriptTool;
 pub use search::{glob, grep};
 
-/// Every built-in tool name, in the order [`all`] gives them.
-pub const NAMES: &[&str] = &["read", "edit", "grep", "glob", "bash"];
+/// Every built-in tool name: those [`all`] gives, in its order, then `apply_patch`.
+pub const NAMES: &[&str] = &["read", "edit", "grep", "glob", "bash", "apply_patch"];
 
 /// `read`, `edit`, `grep`, `glob` and `bash`, with `read` and `edit` sharing one
 /// [`FileTracker`].
@@ -54,6 +57,7 @@ pub fn by_name<S: AsRef<str>>(names: &[S]) -> Result<Vec<Tool>, String> {
             "grep" => Ok(grep()),
             "glob" => Ok(glob()),
             "bash" => Ok(bash()),
+            "apply_patch" => Ok(apply_patch(t.clone())),
             other => Err(format!(
                 "unknown tool `{other}` (built-in tools: {})",
                 NAMES.join(", ")

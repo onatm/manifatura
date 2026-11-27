@@ -40,6 +40,20 @@ let lookup = Tool::new("lookup_order", "Look up one order by id.")
 
 A finished `Tool` is a cheap handle: clone it into several agents.
 
+### Text tools
+
+Some input is text, not JSON: a patch, a script, a query. `run_text` makes a tool whose input the model writes as free text, and `grammar` can constrain it:
+
+```rust
+use manifatura::{Grammar, Tool};
+
+let sql = Tool::new("query", "Run one read-only SQL query.")
+    .grammar(Grammar::lark(r#"start: "SELECT " /[^;]+/"#))
+    .run_text(|sql: String, _cx| async move { run_query(&sql).await });
+```
+
+OpenAI's Responses API offers it as a free-form tool: the model writes the text raw, and follows the grammar while it writes. Other providers offer an object with one string field, `input`, so the tool works with any model. Either way, hooks see the call as `{"input": "…"}`, and the closure gets the text. The grammar shapes what the model writes but is not checked again: a tool still checks its input. `Grammar::regex` takes a regular expression instead of Lark.
+
 ### A tool from a program
 
 `ScriptTool` makes a tool of any executable and a JSON Schema. The input arrives on the program's stdin as JSON, its stdout is the result, and a non-zero exit is an error that includes stderr. It runs through the env, like `bash`:
@@ -85,7 +99,7 @@ A tool returning `ToolResult::ok(text).terminate()` ends the turn after its batc
 
 ## The basic tools
 
-`manifatura::tools` has five tools, enough for a coding or operations agent:
+`manifatura::tools` has these tools, enough for a coding or operations agent:
 
 | Tool | What it does |
 | --- | --- |
@@ -93,14 +107,18 @@ A tool returning `ToolResult::ok(text).terminate()` ends the turn after its batc
 | `edit` | Exact text replacements in a file, or a new file from one edit with an empty `old_text`. |
 | `grep` | A regular expression across files, respecting `.gitignore`. |
 | `glob` | Files by pattern, newest first, respecting `.gitignore`. |
+| `apply_patch` | Adds, updates, moves and deletes files with one patch, in the format of OpenAI's Codex, which OpenAI's models are trained to write. Not in `tools::all()`: give it in place of `edit`. |
 | `bash` | A command in the workspace: builds, tests, git. One that runs longer than its wait (30 seconds by default) is left in the background, and its output goes to files the model can read. |
 
-`edit` refuses to change a file that changed since the model read it. Long output keeps its most useful part (the end of a command's output, the first matches of a search) and says where the rest is.
+`edit` refuses to change a file that changed since the model read it. `apply_patch` finds its place by the patch's context lines instead (exactly, then ignoring whitespace and typographic punctuation), checks the whole patch before writing any file, and writes nothing if any part fails. Long output keeps its most useful part (the end of a command's output, the first matches of a search) and says where the rest is.
 
 ```rust
 use manifatura::tools;
 
 let agent = Agent::new("You are a coding agent.").tools(tools::all()); // read, edit, grep, glob, bash
+
+let agent = Agent::new("You are a coding agent.") // for OpenAI's models
+    .tools(tools::by_name(&["read", "apply_patch", "grep", "glob", "bash"])?);
 
 let agent = Agent::new("You review code; you change nothing.")
     .tools(tools::by_name(&["read", "grep", "glob"])?);

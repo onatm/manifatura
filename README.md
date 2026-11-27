@@ -69,7 +69,7 @@ manifatura needs Rust 1.91 or newer. `Local` and the `bash` tool run on Unix: Li
 | `auth` | no | `manifatura::auth`: signing in to a model vendor, such as OpenAI's Sign in with ChatGPT |
 | `skills` | yes | `manifatura::skills`: Agent Skills, a catalog for the prompt and the `skill` tool |
 | `store-jsonl` | yes | `manifatura::store`: sessions as JSON lines |
-| `tools` | yes | `manifatura::tools`: `read`, `edit`, `grep`, `glob`, `bash` and `Local` |
+| `tools` | yes | `manifatura::tools`: `read`, `edit`, `apply_patch`, `grep`, `glob`, `bash` and `Local` |
 | `subagents` | no | `manifatura::subagents`: the `task` tool and child sessions |
 | `mcp` | no | `manifatura::mcp`: MCP servers' tools, over stdio or HTTP |
 | `testing` | no | `manifatura::testing`: a scripted provider for tests |
@@ -127,7 +127,7 @@ Hooks registered on the runtime run before the agent's own, each in the order ad
 | [`manifatura-providers`](https://docs.rs/manifatura-providers) | llama.cpp and other OpenAI-compatible providers, and OpenAI's Responses API, streamed over SSE |
 | [`manifatura-auth`](https://docs.rs/manifatura-auth) | Signing in to a model vendor: OpenAI's Sign in with ChatGPT |
 | [`manifatura-store`](https://docs.rs/manifatura-store) | Sessions as JSON lines |
-| [`manifatura-tools`](https://docs.rs/manifatura-tools) | `read`, `edit`, `grep`, `glob`, `bash`, script tools and `Local` |
+| [`manifatura-tools`](https://docs.rs/manifatura-tools) | `read`, `edit`, `apply_patch`, `grep`, `glob`, `bash`, script tools and `Local` |
 | [`manifatura-mcp`](https://docs.rs/manifatura-mcp) | MCP servers' tools, over stdio or streamable HTTP |
 
 ## Documentation
