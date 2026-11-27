@@ -1,7 +1,7 @@
 //! Accumulates streamed blocks into the final assistant message.
 
 use manifatura_agent::{
-    Content, ErrorKind, Message, ProviderError, Response, Role, StopReason, Usage,
+    Content, ErrorKind, Message, ProviderError, Response, Role, StopReason, TEXT_INPUT, Usage,
 };
 use serde_json::Value;
 
@@ -14,7 +14,10 @@ pub(crate) enum Block {
     Tool {
         id: String,
         name: String,
+        /// JSON arguments, or the raw input of a free-form call.
         args: String,
+        /// A free-form call: `args` is text, which the call carries as `{"input": text}`.
+        text: bool,
     },
 }
 
@@ -65,10 +68,19 @@ impl Acc {
                 Block::Text(_) => None,
                 Block::Thinking { text, signature } => (!text.is_empty() || signature.is_some())
                     .then_some(Content::Thinking { text, signature }),
-                Block::Tool { id, name, args } => Some(Content::ToolCall {
+                Block::Tool {
                     id,
                     name,
-                    input: parse_args(&args),
+                    args,
+                    text,
+                } => Some(Content::ToolCall {
+                    id,
+                    name,
+                    input: if text {
+                        serde_json::json!({ TEXT_INPUT: args })
+                    } else {
+                        parse_args(&args)
+                    },
                 }),
             })
             .collect();

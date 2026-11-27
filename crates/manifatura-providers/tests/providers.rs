@@ -130,11 +130,11 @@ fn request() -> ModelRequest {
     ];
     ModelRequest::new("m", messages)
         .system("Be brief.")
-        .tools(vec![ToolSpec {
-            name: "lookup".into(),
-            description: "Look up.".into(),
-            input_schema: json!({"type": "object"}),
-        }])
+        .tools(vec![ToolSpec::new(
+            "lookup",
+            "Look up.",
+            json!({"type": "object"}),
+        )])
         .max_tokens(100)
 }
 
@@ -411,6 +411,45 @@ mod responses {
         );
         assert!(reqs[1].0.starts_with("POST /v1/responses"));
         assert_eq!(reqs[1].1["tools"][0]["type"], "namespace");
+    }
+
+    #[tokio::test]
+    async fn streams_a_free_form_call_as_text_input() {
+        let d = |v: Value| format!("event: x\ndata: {v}\n\n");
+        let patch = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch";
+        let chunks = vec![
+            d(
+                json!({"type":"response.output_item.added","item":{"type":"custom_tool_call","id":"ct1","call_id":"c1","name":"apply_patch","input":""}}),
+            ),
+            d(
+                json!({"type":"response.custom_tool_call_input.delta","item_id":"ct1","delta":"*** Begin Patch\n"}),
+            ),
+            d(
+                json!({"type":"response.output_item.done","item":{"type":"custom_tool_call","id":"ct1","call_id":"c1","name":"apply_patch","input":patch}}),
+            ),
+            d(
+                json!({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2}}}),
+            ),
+        ];
+        let (_mock, url) = Mock::start(vec![sse(chunks)]).await;
+        let p = Responses::new(format!("{url}/v1")).key("k");
+        let req = ModelRequest::new("m", vec![Message::user("add a.txt")])
+            .tools(vec![ToolSpec::text("apply_patch", "Patch files.", None)]);
+        let (events, r) = collect(&p, req).await;
+
+        assert_eq!(r.stop, StopReason::ToolUse);
+        assert!(events.contains(&StreamEvent::ToolCallStarted {
+            id: "c1".into(),
+            name: "apply_patch".into()
+        }));
+        assert_eq!(
+            r.message.content[0],
+            Content::ToolCall {
+                id: "c1".into(),
+                name: "apply_patch".into(),
+                input: json!({ "input": patch })
+            }
+        );
     }
 
     #[tokio::test]

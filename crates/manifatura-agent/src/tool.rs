@@ -17,7 +17,7 @@ use crate::env::Env;
 use crate::provider::Abort;
 use crate::record::SessionId;
 use crate::runtime::Runtime;
-use crate::types::ToolSpec;
+use crate::types::{Grammar, TEXT_INPUT, ToolSpec};
 
 /// What a tool hands back to the model (flue's `{output, terminate}` envelope).
 #[derive(Clone, Debug, PartialEq)]
@@ -155,13 +155,15 @@ struct Flags {
 }
 
 impl Tool {
-    /// Starts a tool definition; finish it with [`ToolBuilder::run`] or [`ToolBuilder::run_json`].
+    /// Starts a tool definition; finish it with [`ToolBuilder::run`], [`ToolBuilder::run_json`]
+    /// or [`ToolBuilder::run_text`].
     #[allow(clippy::new_ret_no_self)]
     pub fn new(name: impl Into<String>, description: impl Into<String>) -> ToolBuilder {
         ToolBuilder {
             name: name.into(),
             description: description.into(),
             flags: Flags::default(),
+            grammar: None,
         }
     }
 
@@ -257,13 +259,14 @@ impl std::fmt::Debug for Tool {
     }
 }
 
-/// A tool being defined: started with [`Tool::new`], finished with [`run`](Self::run) or
-/// [`run_json`](Self::run_json).
+/// A tool being defined: started with [`Tool::new`], finished with [`run`](Self::run),
+/// [`run_json`](Self::run_json) or [`run_text`](Self::run_text).
 #[derive(Debug)]
 pub struct ToolBuilder {
     name: String,
     description: String,
     flags: Flags,
+    grammar: Option<Grammar>,
 }
 
 impl ToolBuilder {
@@ -296,6 +299,30 @@ impl ToolBuilder {
         self
     }
 
+    /// The grammar a text tool's input follows (see [`run_text`](Self::run_text)). A provider
+    /// that supports grammars makes the model's text follow it; the tool still gets whatever
+    /// text arrives, so it checks its input as any tool does. Ignored by `run` and `run_json`.
+    pub fn grammar(mut self, grammar: Grammar) -> Self {
+        self.grammar = Some(grammar);
+        self
+    }
+
+    /// A text tool: the model writes its input as free text (a patch, a script) instead of a
+    /// JSON object, and `f` gets that text. Its [`ToolFormat`](crate::ToolFormat) is `Text`, with the grammar
+    /// from [`grammar`](Self::grammar), so OpenAI's Responses API offers it as a free-form
+    /// tool; other providers offer an object with one string field, `input`. Calls reach
+    /// hooks as `{"input": text}`; a bare JSON string is taken as the text too.
+    pub fn run_text<O, F, Fut>(self, f: F) -> Tool
+    where
+        O: IntoToolResult + 'static,
+        F: Fn(String, ToolCx) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
+    {
+        let grammar = self.grammar.clone();
+        let spec = ToolSpec::text(self.name.clone(), self.description.clone(), grammar);
+        self.finish(spec, Text { f, _p: PhantomData })
+    }
+
     /// A typed tool: the input schema comes from `I`'s `JsonSchema`, and the input is
     /// deserialised before `f` runs (a mismatch becomes a tool error the model can fix).
     pub fn run<I, O, F, Fut>(self, f: F) -> Tool
@@ -305,8 +332,12 @@ impl ToolBuilder {
         F: Fn(I, ToolCx) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
-        let schema = schema_for::<I>();
-        self.finish(schema, Typed { f, _p: PhantomData })
+        let spec = ToolSpec::new(
+            self.name.clone(),
+            self.description.clone(),
+            schema_for::<I>(),
+        );
+        self.finish(spec, Typed { f, _p: PhantomData })
     }
 
     /// An untyped tool with a hand-written JSON Schema.
@@ -316,16 +347,13 @@ impl ToolBuilder {
         F: Fn(Value, ToolCx) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
-        self.finish(input_schema, Untyped { f, _p: PhantomData })
+        let spec = ToolSpec::new(self.name.clone(), self.description.clone(), input_schema);
+        self.finish(spec, Untyped { f, _p: PhantomData })
     }
 
-    fn finish(self, input_schema: Value, handler: impl ToolHandler) -> Tool {
+    fn finish(self, spec: ToolSpec, handler: impl ToolHandler) -> Tool {
         Tool(Arc::new(ToolInner {
-            spec: ToolSpec {
-                name: self.name,
-                description: self.description,
-                input_schema,
-            },
+            spec,
             flags: self.flags,
             handler: Arc::new(handler),
         }))
@@ -385,6 +413,42 @@ where
 {
     async fn call(&self, input: Value, cx: ToolCx) -> ToolResult {
         match (self.f)(input, cx).await {
+            Ok(o) => o.into_tool_result(),
+            Err(e) => ToolResult::error(e.to_string()),
+        }
+    }
+}
+
+struct Text<O, F> {
+    f: F,
+    _p: PhantomData<fn() -> O>,
+}
+
+#[async_trait]
+impl<O, F, Fut> ToolHandler for Text<O, F>
+where
+    O: IntoToolResult + 'static,
+    F: Fn(String, ToolCx) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
+{
+    async fn call(&self, input: Value, cx: ToolCx) -> ToolResult {
+        let text = match input {
+            Value::String(s) => s,
+            Value::Object(mut o) => match o.remove(TEXT_INPUT) {
+                Some(Value::String(s)) => s,
+                _ => {
+                    return ToolResult::error(format!(
+                        "invalid input: expected a string field `{TEXT_INPUT}`"
+                    ));
+                }
+            },
+            _ => {
+                return ToolResult::error(format!(
+                    "invalid input: expected text, or an object with a string field `{TEXT_INPUT}`"
+                ));
+            }
+        };
+        match (self.f)(text, cx).await {
             Ok(o) => o.into_tool_result(),
             Err(e) => ToolResult::error(e.to_string()),
         }

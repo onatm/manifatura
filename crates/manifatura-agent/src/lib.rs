@@ -52,8 +52,9 @@ pub use tool::{
     IntoToolResult, Json, Tool, ToolBuilder, ToolCx, ToolError, ToolHandler, ToolResult, schema_for,
 };
 pub use types::{
-    Content, Effort, ErrorKind, Message, ModelInfo, ModelRequest, ProviderError, Response, Role,
-    StopReason, StreamEvent, ToolCall, ToolChoice, ToolSpec, Usage, system_note_text,
+    Content, Effort, ErrorKind, Grammar, GrammarSyntax, Message, ModelInfo, ModelRequest,
+    ProviderError, Response, Role, StopReason, StreamEvent, TEXT_INPUT, ToolCall, ToolChoice,
+    ToolFormat, ToolSpec, Usage, system_note_text, text_input_schema,
 };
 
 pub use async_trait::async_trait;

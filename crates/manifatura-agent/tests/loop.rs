@@ -1154,3 +1154,30 @@ async fn a_hook_can_fail_the_turn_before_the_model_is_called() {
     assert!(matches!(r, Err(Error::Failed(m)) if m == "agent.lua: syntax error"));
     assert!(p.requests().is_empty());
 }
+
+#[tokio::test]
+async fn a_text_tool_gets_the_text_however_it_arrives() {
+    let echo = Tool::new("note", "Keep a note.")
+        .grammar(Grammar::regex("[a-z ]+"))
+        .run_text(|text: String, _cx| async move { Ok(format!("noted: {text}")) });
+    assert_eq!(
+        echo.spec().format,
+        ToolFormat::Text {
+            grammar: Some(Grammar::regex("[a-z ]+"))
+        }
+    );
+    assert_eq!(echo.spec().input_schema, text_input_schema());
+
+    let cx = || ToolCx::detached("c1");
+    let r = echo.call(json!({ "input": "buy milk" }), cx()).await;
+    assert_eq!((r.output.as_str(), r.is_error), ("noted: buy milk", false));
+    let r = echo.call(json!("buy bread"), cx()).await;
+    assert_eq!(r.output, "noted: buy bread", "a bare string is the text");
+    let r = echo.call(json!({ "text": "x" }), cx()).await;
+    assert!(r.is_error);
+    assert!(r.output.contains("`input`"));
+
+    let json_tool =
+        Tool::new("t", "d").run_json(json!({"type": "object"}), |_, _| async { Ok("") });
+    assert!(json_tool.spec().format.is_json());
+}

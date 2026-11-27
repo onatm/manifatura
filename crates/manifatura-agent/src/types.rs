@@ -142,8 +142,9 @@ pub struct ToolCall {
     pub input: Value,
 }
 
-/// What the model is told about a tool.
+/// What the model is told about a tool. Build one with [`ToolSpec::new`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolSpec {
     /// The name the model calls it by.
     pub name: String,
@@ -151,6 +152,131 @@ pub struct ToolSpec {
     pub description: String,
     /// JSON Schema for the tool input; always an object schema.
     pub input_schema: Value,
+    /// How the model writes the input: a JSON object (the default) or free text.
+    #[serde(default, skip_serializing_if = "ToolFormat::is_json")]
+    pub format: ToolFormat,
+}
+
+impl ToolSpec {
+    /// A tool whose input is a JSON object matching `input_schema`.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            input_schema,
+            format: ToolFormat::Json,
+        }
+    }
+
+    /// A tool whose input is free text, constrained by `grammar` if given. Its `input_schema`
+    /// is an object with one string field, `input` ([`TEXT_INPUT`]).
+    pub fn text(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        grammar: Option<Grammar>,
+    ) -> Self {
+        Self {
+            format: ToolFormat::Text { grammar },
+            ..Self::new(name, description, text_input_schema())
+        }
+    }
+}
+
+/// The field a text tool's input arrives in: `{"input": "…"}`.
+pub const TEXT_INPUT: &str = "input";
+
+/// The input schema of a text tool: an object with one required string field, `input`.
+pub fn text_input_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": { TEXT_INPUT: { "type": "string" } },
+        "required": [TEXT_INPUT],
+        "additionalProperties": false,
+    })
+}
+
+/// How the model writes a tool's input.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ToolFormat {
+    /// A JSON object matching the tool's `input_schema`.
+    #[default]
+    Json,
+    /// Free text, such as a patch, optionally constrained by a grammar. A provider that
+    /// supports free-form tools (OpenAI's Responses API) lets the model write the text raw;
+    /// the others offer the tool's `input_schema`, an object with one string field. Either
+    /// way, the call reaches hooks and the tool as `{"input": text}`.
+    Text {
+        /// The grammar the text must follow, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        grammar: Option<Grammar>,
+    },
+}
+
+impl ToolFormat {
+    /// Whether it is [`ToolFormat::Json`].
+    pub fn is_json(&self) -> bool {
+        *self == ToolFormat::Json
+    }
+
+    /// Whether it is [`ToolFormat::Text`].
+    pub fn is_text(&self) -> bool {
+        matches!(self, ToolFormat::Text { .. })
+    }
+}
+
+/// A grammar for a text tool's input, which a provider that supports it enforces while the
+/// model writes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Grammar {
+    /// The grammar's notation.
+    pub syntax: GrammarSyntax,
+    /// The grammar itself.
+    pub definition: String,
+}
+
+impl Grammar {
+    /// A [Lark](https://lark-parser.readthedocs.io) grammar.
+    pub fn lark(definition: impl Into<String>) -> Self {
+        Self {
+            syntax: GrammarSyntax::Lark,
+            definition: definition.into(),
+        }
+    }
+
+    /// A regular expression the whole input must match.
+    pub fn regex(definition: impl Into<String>) -> Self {
+        Self {
+            syntax: GrammarSyntax::Regex,
+            definition: definition.into(),
+        }
+    }
+}
+
+/// A grammar's notation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum GrammarSyntax {
+    /// Lark.
+    Lark,
+    /// A regular expression.
+    Regex,
+}
+
+impl GrammarSyntax {
+    /// The name providers use: `lark` or `regex`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GrammarSyntax::Lark => "lark",
+            GrammarSyntax::Regex => "regex",
+        }
+    }
 }
 
 /// Tokens a model call used, as the provider reports them; zeros when it reports none.

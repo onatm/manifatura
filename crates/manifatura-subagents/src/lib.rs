@@ -345,10 +345,10 @@ impl Subagents {
             description.push_str(&format!("\n- {}: {}", s.name, s.description));
         }
         let names: Vec<&str> = self.list.iter().map(|s| s.name.as_str()).collect();
-        let spec = ToolSpec {
-            name: TASK_TOOL.into(),
+        let spec = ToolSpec::new(
+            TASK_TOOL,
             description,
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "properties": {
                     "agent": { "type": "string", "enum": names, "description": "The subagent." },
@@ -360,7 +360,7 @@ impl Subagents {
                 },
                 "required": ["agent", "prompt"]
             }),
-        };
+        );
         let sequential = self.sequential;
         Tool::from_handler(spec, Task(Arc::new(self.clone())))
             .with_sequential(sequential)

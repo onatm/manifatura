@@ -27,11 +27,7 @@ impl ScriptTool {
         argv: Vec<String>,
     ) -> Self {
         Self {
-            spec: ToolSpec {
-                name: name.into(),
-                description: description.into(),
-                input_schema,
-            },
+            spec: ToolSpec::new(name, description, input_schema),
             argv,
             timeout: Duration::from_secs(120),
         }

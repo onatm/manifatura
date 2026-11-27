@@ -10,15 +10,15 @@
 //! let provider = Responses::new("https://api.openai.com/v1").key("sk-…");
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::stream::BoxStream;
 use manifatura_agent::{
-    Abort, Content, ErrorKind, Message, ModelRequest, Provider, ProviderError, Response, Role,
-    StopReason, StreamEvent, system_note_text,
+    Abort, Content, ErrorKind, Grammar, Message, ModelRequest, Provider, ProviderError, Response,
+    Role, StopReason, StreamEvent, TEXT_INPUT, ToolFormat, ToolSpec, system_note_text,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -124,18 +124,52 @@ impl Provider for Responses {
     }
 }
 
-fn tool_json(t: &manifatura_agent::ToolSpec) -> Value {
+fn tool_json(t: &ToolSpec) -> Value {
     json!({ "type": "function", "name": t.name, "description": t.description,
         "parameters": t.input_schema, "strict": false })
+}
+
+/// A free-form tool: the model writes its input as text, following the grammar if there is
+/// one.
+fn custom_tool_json(t: &ToolSpec, grammar: Option<&Grammar>) -> Value {
+    let format = match grammar {
+        Some(g) => {
+            json!({ "type": "grammar", "syntax": g.syntax.as_str(), "definition": g.definition })
+        }
+        None => json!({ "type": "text" }),
+    };
+    json!({ "type": "custom", "name": t.name, "description": t.description, "format": format })
+}
+
+/// The text of a free-form call's input, which reaches the loop as `{"input": text}`.
+fn text_of(input: &Value) -> String {
+    match input {
+        Value::String(s) => s.clone(),
+        v => match &v[TEXT_INPUT] {
+            Value::String(s) => s.clone(),
+            _ => v.to_string(),
+        },
+    }
 }
 
 impl Responses {
     /// The request body for `req`.
     pub(crate) fn body(&self, req: &ModelRequest) -> Value {
         let ns = self.namespace.as_ref().map(|(n, _)| n.as_str());
+        let text_tools: HashSet<&str> = req
+            .tools
+            .iter()
+            .filter(|t| t.format.is_text())
+            .map(|t| t.name.as_str())
+            .collect();
+        let mut replay = Replay {
+            namespace: ns,
+            text_tools,
+            custom_calls: HashSet::new(),
+        };
         let mut input = Vec::new();
         for m in &req.messages {
-            push_items(&mut input, m, ns);
+            replay.push(&mut input, m);
         }
         let mut b = json!({
             "model": req.model,
@@ -146,13 +180,25 @@ impl Responses {
             "include": ["reasoning.encrypted_content"],
         });
         if !req.tools.is_empty() {
-            let tools: Vec<Value> = req.tools.iter().map(tool_json).collect();
-            b["tools"] = match &self.namespace {
-                Some((name, description)) => json!([{
-                    "type": "namespace", "name": name, "description": description, "tools": tools
-                }]),
-                None => Value::Array(tools),
+            let mut functions = Vec::new();
+            let mut custom = Vec::new();
+            for t in &req.tools {
+                match &t.format {
+                    ToolFormat::Text { grammar } => {
+                        custom.push(custom_tool_json(t, grammar.as_ref()))
+                    }
+                    _ => functions.push(tool_json(t)),
+                }
+            }
+            // Free-form tools stay at the top level, beside the namespace.
+            let mut tools = match &self.namespace {
+                Some((name, description)) if !functions.is_empty() => vec![json!({
+                    "type": "namespace", "name": name, "description": description, "tools": functions
+                })],
+                _ => functions,
             };
+            tools.extend(custom);
+            b["tools"] = Value::Array(tools);
             b["tool_choice"] = json!(req.tool_choice.as_str());
             b["parallel_tool_calls"] = json!(true);
         }
@@ -168,61 +214,86 @@ impl Responses {
     }
 }
 
-fn push_items(out: &mut Vec<Value>, m: &Message, namespace: Option<&str>) {
-    match m.role {
-        Role::Tool => {
-            for c in &m.content {
-                if let Content::ToolResult {
-                    call_id,
-                    output,
-                    is_error,
-                } = c
-                {
-                    let output = if *is_error {
-                        format!("Error: {output}")
-                    } else {
-                        output.clone()
-                    };
-                    out.push(json!({ "type": "function_call_output", "call_id": call_id, "output": output }));
-                }
-            }
-        }
-        Role::Assistant => {
-            for c in &m.content {
-                match c {
-                    // Reasoning goes back only as the encrypted item the API gave us.
-                    Content::Thinking {
-                        text,
-                        signature: Some(enc),
-                    } => {
-                        let summary: Vec<Value> = if text.is_empty() {
-                            Vec::new()
+/// Turns the conversation into input items, remembering which calls were free-form so their
+/// results go back as `custom_tool_call_output`.
+struct Replay<'a> {
+    namespace: Option<&'a str>,
+    /// The tools offered as free-form in this request.
+    text_tools: HashSet<&'a str>,
+    /// The ids of calls replayed as `custom_tool_call`.
+    custom_calls: HashSet<String>,
+}
+
+impl Replay<'_> {
+    fn push(&mut self, out: &mut Vec<Value>, m: &Message) {
+        match m.role {
+            Role::Tool => {
+                for c in &m.content {
+                    if let Content::ToolResult {
+                        call_id,
+                        output,
+                        is_error,
+                    } = c
+                    {
+                        let output = if *is_error {
+                            format!("Error: {output}")
                         } else {
-                            vec![json!({ "type": "summary_text", "text": text })]
+                            output.clone()
                         };
-                        out.push(json!({ "type": "reasoning", "summary": summary, "encrypted_content": enc }));
+                        let kind = if self.custom_calls.contains(call_id) {
+                            "custom_tool_call_output"
+                        } else {
+                            "function_call_output"
+                        };
+                        out.push(json!({ "type": kind, "call_id": call_id, "output": output }));
                     }
-                    Content::Text { text } if !text.is_empty() => out.push(json!({
-                        "type": "message", "role": "assistant",
-                        "content": [{ "type": "output_text", "text": text }]
-                    })),
-                    Content::ToolCall { id, name, input } => {
-                        let mut item = json!({
-                            "type": "function_call", "call_id": id, "name": name,
-                            "arguments": input.to_string()
-                        });
-                        if let Some(ns) = namespace {
-                            item["namespace"] = json!(ns);
-                        }
-                        out.push(item);
-                    }
-                    _ => {}
                 }
             }
-        }
-        Role::User | Role::System => {
-            // System notes go as user text: some routes reject system-role items.
-            let parts: Vec<Value> = m
+            Role::Assistant => {
+                for c in &m.content {
+                    match c {
+                        // Reasoning goes back only as the encrypted item the API gave us.
+                        Content::Thinking {
+                            text,
+                            signature: Some(enc),
+                        } => {
+                            let summary: Vec<Value> = if text.is_empty() {
+                                Vec::new()
+                            } else {
+                                vec![json!({ "type": "summary_text", "text": text })]
+                            };
+                            out.push(json!({ "type": "reasoning", "summary": summary, "encrypted_content": enc }));
+                        }
+                        Content::Text { text } if !text.is_empty() => out.push(json!({
+                            "type": "message", "role": "assistant",
+                            "content": [{ "type": "output_text", "text": text }]
+                        })),
+                        Content::ToolCall { id, name, input }
+                            if self.text_tools.contains(name.as_str()) =>
+                        {
+                            self.custom_calls.insert(id.clone());
+                            out.push(json!({
+                                "type": "custom_tool_call", "call_id": id, "name": name,
+                                "input": text_of(input)
+                            }));
+                        }
+                        Content::ToolCall { id, name, input } => {
+                            let mut item = json!({
+                                "type": "function_call", "call_id": id, "name": name,
+                                "arguments": input.to_string()
+                            });
+                            if let Some(ns) = self.namespace {
+                                item["namespace"] = json!(ns);
+                            }
+                            out.push(item);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Role::User | Role::System => {
+                // System notes go as user text: some routes reject system-role items.
+                let parts: Vec<Value> = m
                 .content
                 .iter()
                 .filter_map(|c| match c {
@@ -236,8 +307,9 @@ fn push_items(out: &mut Vec<Value>, m: &Message, namespace: Option<&str>) {
                     _ => None,
                 })
                 .collect();
-            if !parts.is_empty() {
-                out.push(json!({ "type": "message", "role": "user", "content": parts }));
+                if !parts.is_empty() {
+                    out.push(json!({ "type": "message", "role": "user", "content": parts }));
+                }
             }
         }
     }
@@ -349,35 +421,57 @@ impl Responses {
                         }
                     }
                 }
-                "response.output_item.added" if v["item"]["type"] == "function_call" => {
+                "response.output_item.added"
+                    if matches!(
+                        v["item"]["type"].as_str(),
+                        Some("function_call" | "custom_tool_call")
+                    ) =>
+                {
                     let item = &v["item"];
+                    let text = item["type"] == "custom_tool_call";
                     let id = item["call_id"].as_str().unwrap_or_default().to_string();
                     let name = item["name"].as_str().unwrap_or_default().to_string();
                     deltas.push(StreamEvent::ToolCallStarted {
                         id: id.clone(),
                         name: name.clone(),
                     });
+                    let args = item[if text { "input" } else { "arguments" }]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
                     acc.blocks.push(Block::Tool {
                         id,
                         name,
-                        args: item["arguments"].as_str().unwrap_or_default().to_string(),
+                        args,
+                        text,
                     });
                     if let Some(item_id) = item["id"].as_str() {
                         items.insert(item_id.to_string(), acc.blocks.len() - 1);
                     }
                 }
-                "response.function_call_arguments.delta" => {
+                "response.function_call_arguments.delta"
+                | "response.custom_tool_call_input.delta" => {
                     if let Some(&i) = v["item_id"].as_str().and_then(|id| items.get(id))
                         && let Block::Tool { args, .. } = &mut acc.blocks[i]
                     {
                         args.push_str(v["delta"].as_str().unwrap_or_default());
                     }
                 }
-                "response.output_item.done" if v["item"]["type"] == "function_call" => {
+                "response.output_item.done"
+                    if matches!(
+                        v["item"]["type"].as_str(),
+                        Some("function_call" | "custom_tool_call")
+                    ) =>
+                {
                     // The finished item is authoritative.
+                    let field = if v["item"]["type"] == "custom_tool_call" {
+                        "input"
+                    } else {
+                        "arguments"
+                    };
                     if let Some(&i) = v["item"]["id"].as_str().and_then(|id| items.get(id))
                         && let Block::Tool { args, .. } = &mut acc.blocks[i]
-                        && let Some(full) = v["item"]["arguments"].as_str()
+                        && let Some(full) = v["item"][field].as_str()
                     {
                         *args = full.to_string();
                     }
@@ -449,7 +543,7 @@ impl Responses {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifatura_agent::{ToolChoice, ToolSpec};
+    use manifatura_agent::ToolChoice;
 
     fn req() -> ModelRequest {
         ModelRequest::new(
@@ -482,11 +576,11 @@ mod tests {
             ],
         )
         .system("sys")
-        .tools(vec![ToolSpec {
-                name: "read".into(),
-                description: "Read.".into(),
-                input_schema: json!({"type": "object"}),
-            }])
+        .tools(vec![ToolSpec::new(
+            "read",
+            "Read.",
+            json!({"type": "object"}),
+        )])
         .max_tokens(100)
     }
 
@@ -528,6 +622,78 @@ mod tests {
         assert_eq!(b["tools"][0]["name"], "ws");
         assert_eq!(b["tools"][0]["tools"][0]["name"], "read");
         assert_eq!(b["input"][3]["namespace"], "ws");
+    }
+
+    #[test]
+    fn text_tools_are_custom_and_replay_as_custom_calls() {
+        let req = ModelRequest::new(
+            "m",
+            vec![
+                Message::user("patch it"),
+                Message::new(
+                    Role::Assistant,
+                    vec![
+                        Content::ToolCall {
+                            id: "c1".into(),
+                            name: "apply_patch".into(),
+                            input: json!({ "input": "*** Begin Patch\n*** End Patch" }),
+                        },
+                        Content::ToolCall {
+                            id: "c2".into(),
+                            name: "read".into(),
+                            input: json!({ "path": "a" }),
+                        },
+                    ],
+                ),
+                Message::new(
+                    Role::Tool,
+                    vec![
+                        Content::ToolResult {
+                            call_id: "c1".into(),
+                            output: "done".into(),
+                            is_error: false,
+                        },
+                        Content::ToolResult {
+                            call_id: "c2".into(),
+                            output: "x".into(),
+                            is_error: false,
+                        },
+                    ],
+                ),
+            ],
+        )
+        .tools(vec![
+            ToolSpec::new("read", "Read.", json!({"type": "object"})),
+            ToolSpec::text("apply_patch", "Patch.", Some(Grammar::lark("start: \"x\""))),
+            ToolSpec::text("note", "Free text.", None),
+        ]);
+        let b = Responses::new("http://x")
+            .namespace("ws", "Workspace tools")
+            .body(&req);
+        let tools = b["tools"].as_array().unwrap();
+        assert_eq!(
+            tools.len(),
+            3,
+            "the namespace, then the free-form tools beside it"
+        );
+        assert_eq!(tools[0]["type"], "namespace");
+        assert_eq!(tools[0]["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(tools[1]["type"], "custom");
+        assert_eq!(tools[1]["name"], "apply_patch");
+        assert_eq!(tools[1]["format"]["type"], "grammar");
+        assert_eq!(tools[1]["format"]["syntax"], "lark");
+        assert_eq!(tools[1]["format"]["definition"], "start: \"x\"");
+        assert_eq!(tools[2]["format"], json!({ "type": "text" }));
+
+        let input = b["input"].as_array().unwrap();
+        assert_eq!(input[1]["type"], "custom_tool_call");
+        assert_eq!(input[1]["input"], "*** Begin Patch\n*** End Patch");
+        assert!(input[1].get("namespace").is_none());
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[2]["namespace"], "ws");
+        assert_eq!(input[3]["type"], "custom_tool_call_output");
+        assert_eq!(input[3]["call_id"], "c1");
+        assert_eq!(input[4]["type"], "function_call_output");
     }
 
     #[test]

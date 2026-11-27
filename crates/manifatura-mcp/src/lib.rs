@@ -284,11 +284,11 @@ impl McpServer {
                     description.push('…');
                 }
                 Tool::from_handler(
-                    ToolSpec {
-                        name: tool_name(&self.name, &t.name),
+                    ToolSpec::new(
+                        tool_name(&self.name, &t.name),
                         description,
-                        input_schema: Value::Object((*t.input_schema).clone()),
-                    },
+                        Value::Object((*t.input_schema).clone()),
+                    ),
                     Remote {
                         server: self.clone(),
                         tool: t.name.to_string(),
