@@ -15,6 +15,8 @@ mod acc;
 mod http;
 #[cfg(feature = "openai")]
 pub mod openai;
+#[cfg(feature = "responses")]
+pub mod responses;
 mod sse;
 
 use std::sync::Arc;
@@ -27,6 +29,8 @@ use manifatura_agent::{
 
 #[cfg(feature = "openai")]
 pub use openai::OpenAi;
+#[cfg(feature = "responses")]
+pub use responses::Responses;
 
 /// A provider could not be set up: its key's variable is unset, its kind is not compiled in, or
 /// `MANIFATURA_MODEL` names no registered provider.
@@ -198,6 +202,7 @@ impl Models {
                 },
             );
         }
+        #[cfg_attr(not(feature = "openai"), allow(unused_variables))]
         let key = match (&cfg.api_key, &cfg.api_key_env) {
             (Some(k), _) => Some(k.clone()),
             (None, Some(var)) => Some(std::env::var(var).map_err(|_| {

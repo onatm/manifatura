@@ -21,10 +21,12 @@ tools = ["dep:manifatura-tools"]
 mcp = ["dep:manifatura-mcp"]
 skills = ["dep:manifatura-skills"]
 subagents = ["dep:manifatura-subagents"]
+chatgpt = ["dep:manifatura-chatgpt"]
 testing = ["manifatura-agent/testing"]
 
 [dependencies]
 manifatura-agent.workspace = true
+manifatura-chatgpt = { workspace = true, optional = true }
 manifatura-kit = { workspace = true, optional = true }
 manifatura-mcp = { workspace = true, optional = true }
 manifatura-models = { workspace = true, optional = true }

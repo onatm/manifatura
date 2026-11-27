@@ -729,6 +729,7 @@ name = "manifatura"
 version = "0.3.0"
 dependencies = [
  "manifatura-agent",
+ "manifatura-chatgpt",
  "manifatura-kit",
  "manifatura-mcp",
  "manifatura-models",
@@ -751,6 +752,22 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "manifatura-chatgpt"
+version = "0.3.0"
+dependencies = [
+ "base64",
+ "manifatura-agent",
+ "manifatura-models",
+ "reqwest",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]

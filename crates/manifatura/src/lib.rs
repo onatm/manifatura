@@ -15,6 +15,7 @@
 //! | `skills` (default) | [`skills`]: [Agent Skills](https://agentskills.io), a catalog for the prompt and a `skill` tool |
 //! | `subagents` | [`subagents`]: a `task` tool that hands a self-contained task to a subagent |
 //! | `mcp` | [`mcp`]: MCP servers' tools, over stdio or HTTP |
+//! | `chatgpt` | [`chatgpt`]: Sign in with ChatGPT, to run models on the user's ChatGPT plan |
 //! | `testing` | `testing`: a scripted provider for tests |
 //!
 //! [`prelude`] holds the names most programs use, following the features.
@@ -44,6 +45,9 @@ pub use manifatura_skills as skills;
 
 #[cfg(feature = "subagents")]
 pub use manifatura_subagents as subagents;
+
+#[cfg(feature = "chatgpt")]
+pub use manifatura_chatgpt as chatgpt;
 
 pub use schemars;
 pub use serde_json;

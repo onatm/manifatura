@@ -323,3 +323,111 @@ fn model_info_prefers_overrides_then_catalog() {
     );
     assert!(m.model_info("groq/x").is_none());
 }
+
+#[cfg(feature = "responses")]
+mod responses {
+    use super::*;
+    use manifatura_models::responses::{BearerFuture, Credentials, Responses};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Hands out `t0`, then `t1` after a refusal.
+    #[derive(Clone, Default)]
+    struct Rotating(Arc<AtomicUsize>);
+
+    impl Credentials for Rotating {
+        fn bearer(&self, refused: bool) -> BearerFuture<'_> {
+            if refused {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            let n = self.0.load(Ordering::SeqCst);
+            Box::pin(async move { Ok(format!("t{n}")) })
+        }
+    }
+
+    #[tokio::test]
+    async fn streams_reasoning_text_and_a_tool_call_after_a_refresh() {
+        let d = |v: Value| format!("event: x\ndata: {v}\n\n");
+        let chunks = vec![
+            d(json!({"type":"response.reasoning_summary_text.delta","delta":"thinking"})),
+            d(
+                json!({"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"ENC"}}),
+            ),
+            d(json!({"type":"response.output_text.delta","delta":"Reading."})),
+            d(
+                json!({"type":"response.output_item.added","item":{"type":"function_call","id":"fc1","call_id":"c1","name":"read","arguments":""}}),
+            ),
+            d(
+                json!({"type":"response.function_call_arguments.delta","item_id":"fc1","delta":"{\"path\":"}),
+            ),
+            d(
+                json!({"type":"response.function_call_arguments.delta","item_id":"fc1","delta":"\"a\"}"}),
+            ),
+            d(
+                json!({"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":5}}}),
+            ),
+        ];
+        let refused = Canned {
+            status: 401,
+            headers: vec![],
+            chunks: vec!["{\"detail\":\"expired\"}".into()],
+        };
+        let (mock, url) = Mock::start(vec![refused, sse(chunks)]).await;
+        let creds = Rotating::default();
+        let p = Responses::new(format!("{url}/v1"))
+            .credentials(creds.clone())
+            .namespace("workspace", "Workspace tools");
+        let (events, r) = collect(&p, request()).await;
+
+        assert_eq!(r.stop, StopReason::ToolUse);
+        assert!(events.contains(&StreamEvent::TextDelta("Reading.".into())));
+        assert_eq!(
+            r.message.content[0],
+            Content::Thinking {
+                text: "thinking".into(),
+                signature: Some("ENC".into())
+            }
+        );
+        assert_eq!(
+            r.message.content[2],
+            Content::ToolCall {
+                id: "c1".into(),
+                name: "read".into(),
+                input: json!({"path": "a"})
+            }
+        );
+        let reqs = mock.requests();
+        assert_eq!(reqs.len(), 2);
+        assert!(
+            reqs[0]
+                .0
+                .to_ascii_lowercase()
+                .contains("authorization: bearer t0")
+        );
+        assert!(
+            reqs[1]
+                .0
+                .to_ascii_lowercase()
+                .contains("authorization: bearer t1")
+        );
+        assert!(reqs[1].0.starts_with("POST /v1/responses"));
+        assert_eq!(reqs[1].1["tools"][0]["type"], "namespace");
+    }
+
+    #[tokio::test]
+    async fn plan_usage_failure_mid_stream() {
+        let d = |v: Value| format!("data: {v}\n\n");
+        let chunks = vec![
+            d(json!({"type":"response.output_text.delta","delta":"Hi"})),
+            d(
+                json!({"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"limit"}}}),
+            ),
+        ];
+        let (_mock, url) = Mock::start(vec![sse(chunks)]).await;
+        let p = Responses::new(format!("{url}/v1")).key("k");
+        let (_, r) = collect(&p, request()).await;
+        match r.stop {
+            StopReason::Error(e) => assert_eq!(e.kind, ErrorKind::RateLimited),
+            other => panic!("{other:?}"),
+        }
+    }
+}

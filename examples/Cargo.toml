@@ -8,7 +8,7 @@ publish = false
 repository.workspace = true
 
 [dependencies]
-manifatura = { workspace = true, features = [] }
+manifatura = { workspace = true, features = ["chatgpt"] }
 schemars.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "io-std", "io-util"] }
@@ -28,3 +28,7 @@ path = "dynamic-agent.rs"
 [[example]]
 name = "hooks"
 path = "hooks.rs"
+
+[[example]]
+name = "chatgpt"
+path = "chatgpt.rs"

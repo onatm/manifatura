@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/manifatura",
     "crates/manifatura-agent",
+    "crates/manifatura-chatgpt",
     "crates/manifatura-kit",
     "crates/manifatura-mcp",
     "crates/manifatura-models",
@@ -33,6 +34,7 @@ manifatura-skills = { version = "0.3.0", path = "crates/manifatura-skills" }
 manifatura-store = { version = "0.3.0", path = "crates/manifatura-store" }
 manifatura-subagents = { version = "0.3.0", path = "crates/manifatura-subagents" }
 manifatura-tools = { version = "0.3.0", path = "crates/manifatura-tools" }
+manifatura-chatgpt = { version = "0.3.0", path = "crates/manifatura-chatgpt" }
 async-trait = "0.1.92"
 futures-util = { version = "0.3.34", default-features = false, features = ["std", "alloc"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "stream"] }
