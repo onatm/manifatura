@@ -1,0 +1,435 @@
+//! The agent: the ChatGPT sign-in, the sandboxed env, the tools, the prompt, the approval policy and the
+//! session.
+//!
+//! Every command runs in the sandbox without asking; the model asks to leave it (`sandbox_permissions:
+//! require_escalated`), and that, typing into a command outside it, and MCP tools ask through the agent's
+//! `Approvals`, unless a rule allows them. Reads, patches inside the workspace, plans and skills never ask.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result, bail};
+use manifatura::auth::openai::{Model, SignIn};
+use manifatura::exec::Exec;
+use manifatura::kit::context::{ContextFiles, SystemPrompt};
+use manifatura::kit::{self, Approvals, Summarizer};
+use manifatura::policy::{Decision, Policy};
+use manifatura::sandbox::Sandbox;
+use manifatura::skills::{SkillSet, Skills, SystemPromptExt};
+use manifatura::store::JsonlStore;
+use manifatura::tools::Local;
+use manifatura::{Agent, Effort, Env, Message, Runtime, Session, SessionId, SessionMeta, Store};
+
+use crate::paths;
+
+/// Who the agent is and how it works. The tools' guidelines, the `AGENTS.md` files, the directory and the date
+/// follow it.
+const BASE: &str = include_str!("system.md");
+
+/// The name rho signs in as, and keeps its sessions under.
+pub(crate) const AGENT_NAME: &str = "rho";
+
+/// The built-in tools rho registers, beside `exec_command`, `write_stdin` and `update_plan`. Edits are patches.
+const TOOLS: &[&str] = &["read", "grep", "glob", "apply_patch"];
+
+/// Tools that never ask: reading, patching inside the workspace (the sandbox refuses the rest), commands in the
+/// sandbox, plans and skills.
+const ALLOWED: &[&str] = &[
+    "read",
+    "grep",
+    "glob",
+    "apply_patch",
+    "exec_command",
+    "write_stdin",
+    "update_plan",
+    "skill",
+    "find_tools",
+];
+
+/// What the screen and the command line ask for.
+#[derive(Clone, Debug)]
+pub(crate) struct ChatOptions {
+    /// Open the most recent session for this directory.
+    pub(crate) resume_latest: bool,
+    /// Open this session.
+    pub(crate) resume: Option<String>,
+    /// The model to start with; the plan's first otherwise.
+    pub(crate) model: Option<String>,
+    /// How much the model reasons; the model's default otherwise.
+    pub(crate) effort: Option<Effort>,
+    /// Keep the log, behind a button on the screen.
+    pub(crate) logs: bool,
+    /// The model's context window, which compaction measures against.
+    pub(crate) context_window: u32,
+}
+
+/// The agent and its session, set up once rho is connected.
+pub(crate) struct Prepared {
+    pub(crate) runtime: Runtime,
+    pub(crate) agent: Agent,
+    pub(crate) session: Session,
+    /// The session's conversation so far, when it was resumed.
+    pub(crate) history: Vec<Message>,
+    pub(crate) store: Arc<JsonlStore>,
+    pub(crate) summarizer: Arc<Summarizer>,
+    /// The instruction files the prompt includes.
+    pub(crate) files: Vec<PathBuf>,
+    /// The skills the prompt lists, which `/name` also starts.
+    pub(crate) skills: SkillSet,
+    /// Where the tools act.
+    pub(crate) env: Arc<Sandbox<Local>>,
+    /// The sandbox, described.
+    pub(crate) sandbox: String,
+    /// The MCP servers that started, with their tools' names and whether those are offered directly.
+    pub(crate) servers: Vec<(String, Vec<String>, bool)>,
+    /// What went wrong along the way, to show.
+    pub(crate) problems: Vec<String>,
+    pub(crate) approvals: Approvals,
+    pub(crate) exec: Exec,
+    pub(crate) policy: Policy,
+    /// Where remembered rules are saved.
+    pub(crate) rules_path: PathBuf,
+    /// The models the plan offers, and the one in use.
+    pub(crate) models: Vec<Model>,
+    pub(crate) model: String,
+    pub(crate) effort: Option<Effort>,
+    /// Who is signed in.
+    pub(crate) account: Option<String>,
+}
+
+/// Sign in with ChatGPT, as rho.
+pub(crate) fn sign_in() -> SignIn {
+    SignIn::new(AGENT_NAME, SignIn::default_path(AGENT_NAME))
+}
+
+/// Builds the agent: its env, tools, instructions and hooks, the runtime, and the session to open.
+pub(crate) async fn prepare(
+    cwd: PathBuf,
+    store: Arc<JsonlStore>,
+    options: ChatOptions,
+    mcp: Vec<(String, manifatura::mcp::ServerConfig)>,
+) -> Result<Prepared> {
+    let sign_in = sign_in();
+    let Some(account) = sign_in.account() else {
+        bail!("not signed in: run `rho login`");
+    };
+    let mut problems = Vec::new();
+    let servers_starting = tokio::spawn(crate::mcp::start(mcp));
+    let models = sign_in
+        .models()
+        .await
+        .context("listing the models of your ChatGPT plan")?;
+    let model = match options.model.clone() {
+        Some(model) => {
+            if !models.iter().any(|m| m.slug == model) {
+                problems.push(format!(
+                    "your plan does not list the model {model}; `rho models` lists those it does"
+                ));
+            }
+            model
+        }
+        None => models
+            .first()
+            .map(|m| m.slug.clone())
+            .context("your ChatGPT plan lists no models")?,
+    };
+
+    let local = Local::new(&cwd)?;
+    let env = Arc::new(
+        Sandbox::new(local)
+            .context("starting the sandbox")?
+            .protect(".rho")
+            .allow_unsandboxed(true),
+    );
+    let sandbox = env.describe();
+    let exec = Exec::new().escalation(true);
+    let mut tools = manifatura::tools::by_name(TOOLS).map_err(anyhow::Error::msg)?;
+    tools.extend(exec.tools());
+    tools.push(crate::plan::update_plan());
+
+    // MCP tools come after the built-ins. A server's tools are deferred unless it is `eager`: the model finds them
+    // with find_tools, so their schemas stay out of the prompt until it needs them.
+    let mut servers = Vec::new();
+    for started in servers_starting.await? {
+        match started {
+            Ok(started) => {
+                let names: Vec<String> = started
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name().to_owned())
+                    .collect();
+                servers.push((started.name, names, started.server.config().eager));
+                tools.extend(started.tools);
+            }
+            Err(problem) => problems.push(problem),
+        }
+    }
+    let deferred = tools.iter().any(|tool| tool.is_deferred());
+
+    let home = std::env::var_os("HOME");
+    let mut files = ContextFiles::new()
+        .max_bytes(32 * 1024)
+        .user_file(paths::config_dir().join("AGENTS.md"));
+    let mut skills = Skills::new();
+    if let Some(home) = &home {
+        files = files.home(home);
+        skills = skills.home(home);
+    }
+    let files = files.load(&*env).await;
+    let skills = skills.load(&*env).await;
+    problems.extend(skills.warnings().iter().cloned());
+    tools.extend(skills.tool());
+    let instructions = SystemPrompt::new(BASE.trim())
+        .tools(&tools)
+        .context_files(&files)
+        .skills(&skills)
+        .cwd(&cwd)
+        .date(today())
+        .build();
+
+    let rules_path = paths::rules_path();
+    let policy = policy(&cwd, &rules_path, &exec, &mut problems)?;
+    let approvals = Approvals::new();
+    let summarizer = Arc::new(Summarizer::default());
+    let window = options.context_window;
+    let mut agent = Agent::new(instructions)
+        .name(AGENT_NAME)
+        .model(model.clone())
+        .context_window(window)
+        .max_steps(200)
+        .tools(tools);
+    if let Some(effort) = options.effort {
+        agent = agent.reasoning(effort);
+    }
+    // The catalog goes first, so the hooks after it see the tool a run_tool call stands for.
+    if deferred {
+        agent = agent.hooks(kit::catalog());
+    }
+    let agent = agent
+        .hooks(policy.hooks(&approvals))
+        .hooks(exec.hooks())
+        .hooks(kit::compaction::trim_results(u64::from(window) / 2, 8_000))
+        .hooks(kit::compaction::auto(0.85, summarizer.clone()))
+        .hooks(kit::compaction::on_overflow(summarizer.clone()))
+        .hooks(kit::system_delta());
+
+    let runtime = Runtime::builder()
+        .provider(sign_in.provider())
+        .store(store.clone())
+        .env(env.clone())
+        .build();
+    let known = recent_sessions(store.as_ref()).await?;
+    let id = match (&options.resume, options.resume_latest) {
+        (Some(id), _) => {
+            let id = SessionId::from(id.as_str());
+            if !known.iter().any(|s| s.id == id) {
+                bail!(
+                    "no session {} in this directory; `rho --resume` lists them",
+                    id.as_str()
+                );
+            }
+            id
+        }
+        (_, true) => known
+            .iter()
+            .max_by_key(|s| s.updated)
+            .map_or_else(SessionId::new, |latest| latest.id.clone()),
+        _ => SessionId::new(),
+    };
+    // A new session is only written once it is used, so starting rho and quitting leaves nothing behind.
+    let existed = known.iter().any(|s| s.id == id);
+    let session = runtime.session(&agent, id);
+    let history = if existed {
+        session.history().await?
+    } else {
+        Vec::new()
+    };
+    let effort = options.effort;
+    Ok(Prepared {
+        runtime,
+        agent,
+        session,
+        history,
+        store,
+        summarizer,
+        files: files.into_iter().map(|file| file.path).collect(),
+        skills,
+        env,
+        sandbox,
+        servers,
+        problems,
+        approvals,
+        exec,
+        policy,
+        rules_path,
+        models,
+        model,
+        effort,
+        account: account.email.or(Some(account.subject)),
+    })
+}
+
+/// What asks and what may run: your rules, the project's (which may only ask and deny: a repository must not let
+/// commands out of the sandbox), then rho's defaults.
+fn policy(
+    cwd: &Path,
+    rules_path: &Path,
+    exec: &Exec,
+    problems: &mut Vec<String>,
+) -> Result<Policy> {
+    let mut policy = Policy::new();
+    if let Some(rules) = paths::read_rules(rules_path)? {
+        policy = policy.rules(&rules).map_err(anyhow::Error::msg)?;
+    }
+    let project = cwd.join(paths::PROJECT_RULES);
+    if let Some(mut rules) = paths::read_rules(&project)? {
+        if !rules.allow.is_empty() {
+            problems.push(format!(
+                "{} allows {}: a project's rules may only ask and deny, so these were left out; add them to {} \
+                 to allow them",
+                paths::PROJECT_RULES,
+                rules.allow.join(", "),
+                rules_path.display()
+            ));
+            rules.allow.clear();
+        }
+        policy = policy.rules(&rules).map_err(anyhow::Error::msg)?;
+    }
+    let typing = exec.clone();
+    let mut policy = policy
+        .when(
+            |call, _| manifatura::exec::is_escalation(call),
+            Decision::Ask,
+        )
+        .when(
+            move |call, session| typing.types_into_escalated(call, session),
+            Decision::Ask,
+        );
+    for tool in ALLOWED {
+        policy = policy.tool_default(*tool, Decision::Allow);
+    }
+    let save = rules_path.to_path_buf();
+    Ok(policy.default(Decision::Ask).on_remember(move |rule| {
+        if let Err(error) = paths::remember(&save, rule) {
+            tracing::warn!("could not save the rule {rule}: {error:#}");
+        }
+    }))
+}
+
+/// Reads `off`, `low`, `medium` or `high`.
+pub(crate) fn parse_effort(text: &str) -> Result<Effort, String> {
+    match text.trim().to_lowercase().as_str() {
+        "off" | "none" => Ok(Effort::Off),
+        "low" => Ok(Effort::Low),
+        "medium" => Ok(Effort::Medium),
+        "high" => Ok(Effort::High),
+        other => Err(format!("no effort {other}: use off, low, medium or high")),
+    }
+}
+
+/// An effort as `/effort` names it; the model's own default when none is set.
+pub(crate) fn effort_label(effort: Option<Effort>) -> String {
+    match effort {
+        None => "default".into(),
+        Some(Effort::Off) => "off".into(),
+        Some(effort) => effort.as_str().into(),
+    }
+}
+
+/// This directory's sessions, most recent first.
+pub(crate) async fn recent_sessions(store: &dyn Store) -> Result<Vec<SessionMeta>> {
+    let mut sessions = store.list().await?;
+    sessions.retain(|s| s.agent.as_deref() == Some(AGENT_NAME));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.updated));
+    Ok(sessions)
+}
+
+/// How long ago a time in milliseconds since the epoch was, roughly.
+pub(crate) fn ago(ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let minutes = now.saturating_sub(ms) / 60_000;
+    match minutes {
+        0 => "just now".into(),
+        1..=59 => format!("{minutes} min ago"),
+        60..=1439 => format!("{} h ago", minutes / 60),
+        _ => format!("{} days ago", minutes / 1440),
+    }
+}
+
+/// Today's local date, for the system prompt. Day granularity keeps the prompt the same all day, so the
+/// provider's prompt cache stays warm.
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifatura::ToolCall;
+    use serde_json::json;
+
+    fn call(name: &str, input: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: "c".into(),
+            name: name.into(),
+            input,
+        }
+    }
+
+    #[test]
+    fn the_policy_asks_only_to_leave_the_sandbox_and_for_other_tools() {
+        let dir = std::env::temp_dir().join(format!("rho-policy-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".rho")).unwrap();
+        std::fs::write(
+            dir.join(paths::PROJECT_RULES),
+            "allow = [\"exec_command(curl)\"]\ndeny = [\"exec_command(git push)\"]\n",
+        )
+        .unwrap();
+        let mut problems = Vec::new();
+        let policy = policy(&dir, &dir.join("none.toml"), &Exec::new(), &mut problems).unwrap();
+        let s = SessionId::from("s");
+        let decide = |c: &ToolCall| policy.decide(c, &s).decision;
+        assert_eq!(
+            decide(&call("exec_command", json!({"cmd": "npm install"}))),
+            Decision::Allow,
+            "sandboxed"
+        );
+        let escalated = json!({"cmd": "npm install", "sandbox_permissions": "require_escalated", "justification": "x"});
+        assert_eq!(decide(&call("exec_command", escalated)), Decision::Ask);
+        assert_eq!(
+            decide(&call("apply_patch", json!({"input": "…"}))),
+            Decision::Allow
+        );
+        assert_eq!(
+            decide(&call("mcp__github__create_issue", json!({}))),
+            Decision::Ask
+        );
+        assert_eq!(
+            decide(&call("exec_command", json!({"cmd": "git push"}))),
+            Decision::Deny,
+            "the project denies"
+        );
+        let curl = json!({"cmd": "curl x", "sandbox_permissions": "require_escalated"});
+        assert_eq!(
+            decide(&call("exec_command", curl)),
+            Decision::Ask,
+            "the project cannot allow"
+        );
+        assert!(
+            problems[0].contains("may only ask and deny"),
+            "{problems:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn efforts_read_and_print() {
+        assert_eq!(parse_effort("High"), Ok(Effort::High));
+        assert_eq!(parse_effort("none"), Ok(Effort::Off));
+        assert!(parse_effort("max").is_err());
+        assert_eq!(effort_label(None), "default");
+        assert_eq!(effort_label(Some(Effort::Medium)), "medium");
+    }
+}
