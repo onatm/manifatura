@@ -48,7 +48,8 @@ async fn ask(call: ToolCall) -> kit::Answer {
 - **Tools.** Your own tools from a closure and a `JsonSchema` input, or from a program; the basic `read`, `edit`, `grep`, `glob` and `bash`; MCP servers' tools, over stdio or HTTP. Tools act through an `Env`, so the same tools run locally, in a sandbox or on another machine.
 - **Deferred tools.** Tools marked deferred stay out of the prompt, and `kit::catalog` lets the model search for them and run them. Useful with MCP servers that bring dozens of tools.
 - **`AGENTS.md` context.** `kit::context` finds `AGENTS.md` (or `CLAUDE.md`) files from the repository root down, and builds a system prompt from them and the tools' own guidelines.
-- **Small.** About 9,000 lines across seven crates, a core that depends on `serde`, `tokio` and little else, and a facade that puts each block behind a feature.
+- **Skills.** `skills` loads [Agent Skills](https://agentskills.io) from `.agents/skills`, your own directories or the binary itself. The prompt lists them, the model loads one with the `skill` tool when a task calls for it, and your UI can start one with `/name`.
+- **Small.** About 10,000 lines across eight crates, a core that depends on `serde`, `tokio` and little else, and a facade that puts each block behind a feature.
 
 ## Install
 
@@ -63,10 +64,13 @@ manifatura needs Rust 1.91 or newer. `Local` and the `bash` tool run on Unix: Li
 | --- | --- | --- |
 | `kit` | yes | `manifatura::kit`: approvals, compaction, the catalog, input repair, `AGENTS.md` context |
 | `models-openai` | yes | `manifatura::models`: llama.cpp and other OpenAI-compatible servers |
+| `skills` | yes | `manifatura::skills`: Agent Skills, a catalog for the prompt and the `skill` tool |
 | `store-jsonl` | yes | `manifatura::store`: sessions as JSON lines |
 | `tools` | yes | `manifatura::tools`: `read`, `edit`, `grep`, `glob`, `bash` and `Local` |
 | `mcp` | no | `manifatura::mcp`: MCP servers' tools, over stdio or HTTP |
 | `testing` | no | `manifatura::testing`: a scripted provider for tests |
+
+`manifatura::prelude` brings in the names most programs use, and follows the features: with `skills`, `SystemPrompt` gains `skills(&set)`.
 
 ## Quick start
 
@@ -114,6 +118,7 @@ Hooks registered on the runtime run before the agent's own, each in the order ad
 | [`manifatura`](https://docs.rs/manifatura) | The facade: the core, with each block behind a feature |
 | [`manifatura-agent`](https://docs.rs/manifatura-agent) | The loop, typed hooks, sessions, and the `Provider`, `Env` and `Store` traits |
 | [`manifatura-kit`](https://docs.rs/manifatura-kit) | Hook bundles and `AGENTS.md` context |
+| [`manifatura-skills`](https://docs.rs/manifatura-skills) | Agent Skills: discovery, the prompt catalog and the `skill` tool |
 | [`manifatura-models`](https://docs.rs/manifatura-models) | llama.cpp and other OpenAI-compatible providers, streamed over SSE |
 | [`manifatura-store`](https://docs.rs/manifatura-store) | Sessions as JSON lines |
 | [`manifatura-tools`](https://docs.rs/manifatura-tools) | `read`, `edit`, `grep`, `glob`, `bash`, script tools and `Local` |
@@ -134,11 +139,11 @@ The guides are on [manifatura.dev](https://manifatura.dev), and in [`docs/`](doc
 
 ## Used by
 
-- [rustling](https://github.com/onatm/rustling): an inference engine for Apple silicon whose `chat` command is a manifatura agent, with the model running in the same process through its own `Provider`.
+- [rustling](https://github.com/onatm/rustling): an inference engine for Apple silicon whose `chat` command is a manifatura agent, with the model running in the same process through its own `Provider`, and skills built into the binary or kept in a project's `.rustling/skills`.
 
 ## Status
 
-manifatura is young: 0.x releases may change the API. It has no durability: a session survives a restart, but a turn that was running when the process died does not, and tool calls it left without results are marked as interrupted. There are no subagents or skills yet. The core, kit and store reach files, processes and the clock only through `Env`, `Store` and `Provider`, so they can be hosted in WebAssembly later.
+manifatura is young: 0.x releases may change the API. It has no durability: a session survives a restart, but a turn that was running when the process died does not, and tool calls it left without results are marked as interrupted. There are no subagents yet. The core, kit and store reach files, processes and the clock only through `Env`, `Store` and `Provider`, so they can be hosted in WebAssembly later.
 
 ## Acknowledgements
 
