@@ -925,6 +925,9 @@ pub(crate) fn tokens(n: u64) -> String {
 /// What the person typed for a user message: a skill started with `/name request` was sent as the skill's
 /// instructions and then the request, and shows as the command again.
 fn typed(text: &str) -> String {
+    if text == super::WAKE {
+        return "(a background command exited)".to_owned();
+    }
     let Some(rest) = text.strip_prefix("<skill_content name=\"") else {
         return text.to_owned();
     };
@@ -954,6 +957,10 @@ mod tests {
             "/codebase-tour"
         );
         assert_eq!(super::typed("hello"), "hello");
+        assert_eq!(
+            super::typed(super::super::WAKE),
+            "(a background command exited)"
+        );
     }
 
     use super::*;

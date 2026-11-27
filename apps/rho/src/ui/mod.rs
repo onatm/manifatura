@@ -73,6 +73,10 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("/exit", "", "quit"),
 ];
 const MAX_COMPLETIONS: usize = 8;
+/// The prompt that wakes the agent when a command it left in the background exits; the exec hook's note before
+/// its first step says which command and how it ended.
+const WAKE: &str = "A command you left running in the background has exited; the note says which. If the task \
+                    depends on it, carry on; otherwise say in a line what happened.";
 
 /// One way to complete what is typed.
 #[derive(Clone, Debug)]
@@ -321,7 +325,7 @@ async fn screen(
                     Err(broadcast::error::RecvError::Closed) => app.approvals = None,
                 },
                 event = next(&mut app.commands) => match event {
-                    Ok(event) => app.command_event(event),
+                    Ok(event) => app.command_event(event).await,
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => app.commands = None,
                 },
@@ -513,20 +517,32 @@ impl App {
         }
     }
 
-    fn command_event(&mut self, event: ExecEvent) {
+    /// A command left in the background exited. While the agent works, it hears of it before its next step
+    /// (the exec hook's note); while it is idle, it is woken to carry on.
+    async fn command_event(&mut self, event: ExecEvent) {
         let Some(ready) = &self.ready else { return };
-        if let ExecEvent::Exited {
+        let ExecEvent::Exited {
             session, id, code, ..
         } = event
-            && &session == ready.session.id()
-            && self.background.remove(&id)
-        {
-            let level = if code == 0 { Level::Info } else { Level::Warn };
-            self.view.notice(
-                level,
-                format!("background command {id} exited with code {code}"),
-            );
+        else {
+            return;
+        };
+        if &session != ready.session.id() || !self.background.remove(&id) {
+            return;
         }
+        let level = if code == 0 { Level::Info } else { Level::Warn };
+        self.view.notice(
+            level,
+            format!("background command {id} exited with code {code}"),
+        );
+        if self.wakes() {
+            self.prompt(WAKE.into()).await;
+        }
+    }
+
+    /// Whether an exit in the background starts a turn: only when nothing runs and nobody is being asked.
+    fn wakes(&self) -> bool {
+        self.ready.is_some() && !self.view.is_busy() && self.asks.is_empty() && self.abort.is_none()
     }
 
     async fn input(&mut self, input: Input) {
