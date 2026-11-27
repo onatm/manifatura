@@ -938,7 +938,7 @@ const EXPLORE_NOTE: &str = "The explore subagent looked into my question; its re
 /// What the person typed for a user message: a skill started with `/name request` was sent as the skill's
 /// instructions and then the request, and shows as the command again; an `/explore` question with its report
 /// shows as the command.
-fn typed(text: &str) -> String {
+pub(crate) fn typed(text: &str) -> String {
     if let Some(rest) = text.strip_prefix("<explore_report>\n")
         && let Some((_, after)) = rest.rsplit_once("\n</explore_report>\n\n")
         && let Some(question) = after.strip_prefix(EXPLORE_NOTE)

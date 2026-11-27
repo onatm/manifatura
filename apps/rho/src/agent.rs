@@ -18,6 +18,7 @@ use manifatura::policy::{Decision, Policy};
 use manifatura::providers::responses::Responses;
 use manifatura::sandbox::Sandbox;
 use manifatura::skills::{SkillSet, Skills, SystemPromptExt};
+use manifatura::snapshots::Snapshots;
 use manifatura::store::JsonlStore;
 use manifatura::subagents::{Definition, Subagent, Subagents};
 use manifatura::tools::Local;
@@ -90,6 +91,8 @@ pub(crate) struct Prepared {
     pub(crate) skills: SkillSet,
     /// The subagents behind the `task` tool, which `/explore` also starts.
     pub(crate) subagents: Subagents,
+    /// The files as each turn found them, for `/rewind` and `/undo`.
+    pub(crate) snapshots: Snapshots,
     /// Where the tools act.
     pub(crate) env: Arc<Sandbox<Local>>,
     /// The sandbox, described.
@@ -215,6 +218,8 @@ pub(crate) async fn prepare(
         .date(today())
         .build();
 
+    // rho's own repository, outside the workspace: git writes there unsandboxed, which only rho asks for.
+    let snapshots = Snapshots::new(paths::snapshots_dir(&cwd)).unsandboxed(true);
     let rules_path = paths::rules_path();
     let policy = policy(&cwd, &rules_path, &exec, &mut problems)?;
     let approvals = Approvals::new();
@@ -242,6 +247,7 @@ pub(crate) async fn prepare(
     let agent = agent
         .hooks(policy.hooks(&approvals))
         .hooks(exec.hooks())
+        .hooks(snapshots.hooks())
         .hooks(kit::compaction::trim_results(u64::from(window) / 2, 8_000))
         .hooks(kit::compaction::auto(0.85, summarizer.clone()))
         .hooks(kit::compaction::on_overflow(summarizer.clone()))
@@ -288,6 +294,7 @@ pub(crate) async fn prepare(
         files: files.into_iter().map(|file| file.path).collect(),
         skills,
         subagents,
+        snapshots,
         env,
         sandbox,
         servers,

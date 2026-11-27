@@ -6,6 +6,7 @@ mod approval;
 mod files;
 mod layout;
 pub(crate) mod logs;
+mod rewind;
 mod screen;
 mod text;
 mod view;
@@ -34,8 +35,9 @@ use tokio::sync::{broadcast, mpsc};
 
 use self::approval::Ask;
 use self::logs::{LogLine, Logs};
+use self::rewind::{Outcome, Point, Restore, Rewind};
 use self::screen::ChatScreen;
-use self::view::{Activity, Item, Level, View, dim, explore_message, tokens};
+use self::view::{Activity, Item, Level, View, dim, explore_message, tokens, typed};
 use crate::agent::{
     ChatOptions, Prepared, ago, effort_label, efforts, parse_effort, recent_sessions,
 };
@@ -47,6 +49,16 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("/new", "", "start a new session"),
     ("/resume", "[ID]", "pick a session or open it by ID"),
     ("/sessions", "", "list this directory's sessions"),
+    (
+        "/rewind",
+        "",
+        "go back to before a message: the code, the conversation or both",
+    ),
+    (
+        "/undo",
+        "",
+        "undo the last turn: its changes and the conversation",
+    ),
     (
         "/explore",
         "<question>",
@@ -127,6 +139,8 @@ struct App {
     sessions: Vec<SessionMeta>,
     /// Selected row while the session picker is open.
     resume_pick: Option<usize>,
+    /// The rewind picker, while it is open.
+    rewind: Option<Rewind>,
     /// The approvals waiting, oldest first.
     asks: VecDeque<Ask>,
     /// Set by a first Ctrl-C with nothing to stop; a second one quits.
@@ -357,6 +371,27 @@ async fn screen(
     (id, result)
 }
 
+/// Your messages on the session's current branch, newest first, each with the snapshot its turn took.
+async fn rewind_points(session: &Session) -> Result<Vec<Point>> {
+    let path = session.path().await?;
+    let mut points: Vec<Point> = path
+        .iter()
+        .filter_map(|e| match &e.record {
+            manifatura::Record::Message { message } if message.role == manifatura::Role::User => {
+                Some(Point {
+                    id: e.id.clone(),
+                    parent: e.parent_id.clone(),
+                    text: typed(&message.text()),
+                    tree: manifatura::snapshots::before(&path, &e.id),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    points.reverse();
+    Ok(points)
+}
+
 /// What a running `/explore` sends the screen: the lines it logs, then its report.
 enum Explored {
     Line(String),
@@ -410,6 +445,7 @@ impl App {
             completions_hidden: false,
             sessions: Vec::new(),
             resume_pick: None,
+            rewind: None,
             asks: VecDeque::new(),
             armed: false,
             tick: 0,
@@ -593,7 +629,9 @@ impl App {
                     self.logs_open = !self.logs_open;
                 }
             }
-            Input::Paste(text) if self.asks.is_empty() && self.resume_pick.is_none() => {
+            Input::Paste(text)
+                if self.asks.is_empty() && self.resume_pick.is_none() && self.rewind.is_none() =>
+            {
                 self.picked = 0;
                 self.completions_hidden = false;
                 self.input
@@ -621,6 +659,17 @@ impl App {
                 if let Some(ready) = &self.ready {
                     ready.approvals.answer(ask.id(), answer);
                 }
+            }
+            return;
+        }
+        if let Some(rewind) = &mut self.rewind {
+            match rewind.key(key) {
+                Some(Outcome::Cancel) => self.rewind = None,
+                Some(Outcome::Go(point, restore)) => {
+                    self.rewind = None;
+                    self.rewind_to(point, restore).await;
+                }
+                None => {}
             }
             return;
         }
@@ -1105,6 +1154,24 @@ impl App {
                 },
                 Err(error) => self.view.notice(Level::Warn, error),
             },
+            "/rewind" | "/undo" => match rewind_points(&ready.session).await {
+                Err(error) => self
+                    .view
+                    .notice(Level::Error, format!("could not read the session: {error}")),
+                Ok(points) if points.is_empty() => {
+                    self.view.notice(Level::Info, "nothing to go back to yet")
+                }
+                Ok(points) if command == "/undo" => {
+                    let point = points.into_iter().next().expect("checked");
+                    let restore = if point.tree.is_some() {
+                        Restore::Both
+                    } else {
+                        Restore::Conversation
+                    };
+                    self.rewind_to(point, restore).await;
+                }
+                Ok(points) => self.rewind = Some(Rewind::new(points)),
+            },
             "/explore" if argument.is_empty() => self.view.notice(
                 Level::Info,
                 "/explore <question>: what to find out about the code",
@@ -1248,6 +1315,55 @@ impl App {
         if !aborted {
             self.prompt(explore_message(&question, &report.output))
                 .await;
+        }
+    }
+
+    /// Goes back to before `point`: the files as its turn found them, the conversation as it was before it, or
+    /// both. A conversation that goes back puts the message in the composer, to edit and send again.
+    async fn rewind_to(&mut self, point: Point, restore: Restore) {
+        let Some(ready) = &self.ready else { return };
+        if restore != Restore::Conversation {
+            let Some(tree) = &point.tree else {
+                self.view.notice(
+                    Level::Warn,
+                    "there is no snapshot of the files for that message",
+                );
+                return;
+            };
+            match ready.snapshots.restore(&*ready.env, tree).await {
+                Ok(r) => self.view.notice(
+                    Level::Info,
+                    format!(
+                        "files restored: {} written back, {} removed",
+                        r.restored.len(),
+                        r.removed.len()
+                    ),
+                ),
+                Err(error) => {
+                    self.view.notice(
+                        Level::Error,
+                        format!("could not restore the files: {error}"),
+                    );
+                    return;
+                }
+            }
+        }
+        if restore != Restore::Code {
+            match ready.session.branch(point.parent.clone()).await {
+                Ok(()) => {
+                    let first = point.text.lines().next().unwrap_or_default();
+                    self.view.notice(
+                        Level::Info,
+                        format!("conversation rewound to before: {first}"),
+                    );
+                    self.context = None;
+                    self.input = composer();
+                    self.input.insert_str(&point.text);
+                }
+                Err(error) => self
+                    .view
+                    .notice(Level::Error, format!("could not rewind: {error}")),
+            }
         }
     }
 
@@ -1621,7 +1737,7 @@ mod tests {
                 .map(|c| c.text)
                 .collect()
         };
-        assert_eq!(names("/re"), ["/resume "]);
+        assert_eq!(names("/re"), ["/resume ", "/rewind"]);
         assert_eq!(names("/s"), ["/sessions", "/status", "/skills"]);
         assert_eq!(
             names("/"),

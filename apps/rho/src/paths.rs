@@ -41,6 +41,13 @@ pub(crate) fn sessions_dir(cwd: &Path) -> PathBuf {
         .join(slug(cwd))
 }
 
+/// Where this directory's snapshots are kept: a git repository of rho's own, beside the sessions.
+pub(crate) fn snapshots_dir(cwd: &Path) -> PathBuf {
+    base("XDG_DATA_HOME", ".local/share")
+        .join("rho/snapshots")
+        .join(format!("{}.git", slug(cwd)))
+}
+
 /// A directory name for a path: `/Users/me/src/app` is `Users-me-src-app`.
 pub(crate) fn slug(path: &Path) -> String {
     let mut slug = String::new();

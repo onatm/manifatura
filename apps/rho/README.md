@@ -24,6 +24,10 @@ cargo run -p rho -- models           # the models your plan offers
   typing into one that runs there, and MCP tools. Each question offers once, the session, "always" (a rule
   like `exec_command(git commit)`, saved to your rules), or deny.
 
+- **Undo**: as each turn starts, rho snapshots the workspace (what `.gitignore` leaves out is left out) in a git
+  repository of its own, never your `.git`. `/rewind` goes back to before one of your messages: the code, the
+  conversation, or both, with the message back in the composer to edit. `/undo` rewinds the last turn.
+
 ## Files
 
 | Path | What |
@@ -34,6 +38,7 @@ cargo run -p rho -- models           # the models your plan offers
 | `~/.config/rho/mcp.toml` | MCP servers (`[servers.<name>]` with `url` or `command`) |
 | `~/.config/rho/AGENTS.md`, `AGENTS.md` | Instructions, with the project's from its root down |
 | `~/.local/share/rho/sessions/<directory>` | Sessions, one JSON-lines file each |
+| `~/.local/share/rho/snapshots/<directory>.git` | The workspace as each turn found it |
 
 In the chat, `/help` lists the commands: `/model`, `/effort` (the levels the model has), `/ps` and `/kill` for background commands, `/rules`,
-`/compact`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops it.
+`/rewind`, `/undo`, `/compact`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops it.

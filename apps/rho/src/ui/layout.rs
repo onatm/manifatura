@@ -49,6 +49,9 @@ impl App {
         if self.resume_pick.is_some() {
             return (self.sessions.len() + 2).min(usize::from(limit)) as u16;
         }
+        if let Some(rewind) = &self.rewind {
+            return rewind.height(width, limit);
+        }
         let editor = self.editor_rows(width);
         let logs = if self.logs_open {
             self.log.len().clamp(1, LOG_PANEL) + 1
@@ -81,6 +84,11 @@ impl App {
         }
         if let Some(selected) = self.resume_pick {
             self.draw_sessions(f, rows, selected);
+            return;
+        }
+        if let Some(rewind) = &self.rewind {
+            self.log_button = None;
+            rewind.draw(f, rows);
             return;
         }
         let width = rows.width as usize;
