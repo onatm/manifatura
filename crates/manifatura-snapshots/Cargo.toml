@@ -1,0 +1,25 @@
+[package]
+name = "manifatura-snapshots"
+description = "Workspace snapshots for manifatura: the files as each turn found them, in a git repository of their own, to restore later."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-snapshots"
+
+[dependencies]
+manifatura-agent.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+manifatura-agent = { workspace = true, features = ["testing"] }
+manifatura-tools.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

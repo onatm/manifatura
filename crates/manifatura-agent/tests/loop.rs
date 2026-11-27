@@ -1192,3 +1192,41 @@ fn efforts_read_their_api_names() {
     assert_eq!(serde_json::to_value(Effort::XHigh).unwrap(), json!("xhigh"));
     assert_eq!(Effort::parse("extreme"), None);
 }
+
+#[tokio::test]
+async fn the_path_follows_the_current_branch() {
+    let p = ScriptedProvider::new()
+        .text("one")
+        .text("two")
+        .text("three");
+    let rt = runtime(&p, mem());
+    let s = rt.session(&Agent::new("t").model("m"), SessionId::new());
+    s.prompt("a").await.unwrap().wait().await.unwrap();
+    s.prompt("b").await.unwrap().wait().await.unwrap();
+    let texts = |path: &[Entry]| -> Vec<String> {
+        path.iter()
+            .filter_map(|e| match &e.record {
+                Record::Message { message } => Some(message.text()),
+                _ => None,
+            })
+            .collect()
+    };
+    let path = s.path().await.unwrap();
+    assert_eq!(texts(&path), ["a", "one", "b", "two"]);
+    // Back to before "b": the next prompt starts a branch beside it.
+    let one = path
+        .iter()
+        .find(|e| texts(std::slice::from_ref(e)) == ["one"])
+        .unwrap()
+        .id
+        .clone();
+    s.branch(Some(one)).await.unwrap();
+    assert_eq!(texts(&s.path().await.unwrap()), ["a", "one"]);
+    s.prompt("c").await.unwrap().wait().await.unwrap();
+    assert_eq!(texts(&s.path().await.unwrap()), ["a", "one", "c", "three"]);
+    assert_eq!(
+        texts(&s.entries().await.unwrap()).len(),
+        6,
+        "the other branch stays in the session"
+    );
+}

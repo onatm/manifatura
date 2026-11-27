@@ -414,6 +414,7 @@ impl Shared {
 struct Snapshot {
     messages: Vec<Message>,
     state: BTreeMap<String, Value>,
+    leaf: Option<String>,
 }
 
 /// Work for the session worker. Everything that touches the context runs here, in order.
@@ -630,6 +631,17 @@ impl Session {
         Ok(self.shared.rt.store.load(&self.shared.id).await?)
     }
 
+    /// The current branch: the tree entries from the first to the one the next message follows,
+    /// without meta records. After [`branch`](Self::branch), the branch it moved to.
+    pub async fn path(&self) -> Result<Vec<Entry>, Error> {
+        let leaf = self.snapshot().await?.leaf;
+        let entries = self.entries().await?;
+        Ok(crate::context::path_to(&entries, leaf.as_deref())
+            .into_iter()
+            .cloned()
+            .collect())
+    }
+
     /// Every event of every turn in this session.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
@@ -823,6 +835,7 @@ async fn worker(shared: Arc<Shared>, mut rx: mpsc::UnboundedReceiver<Job>) {
                 let _ = done.send(Ok(Snapshot {
                     messages: live.messages.clone(),
                     state: (*live.state).clone(),
+                    leaf: live.leaf.clone(),
                 }));
             }
             Job::Record { record, done } => {

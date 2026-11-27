@@ -37,6 +37,23 @@ pub(crate) struct Live {
     pub measured: Option<(u64, usize)>,
 }
 
+/// The tree entries from the first to `leaf`, without meta records.
+pub(crate) fn path_to<'a>(entries: &'a [Entry], leaf: Option<&str>) -> Vec<&'a Entry> {
+    let by_id: HashMap<&str, &Entry> = entries
+        .iter()
+        .filter(|e| !e.record.is_meta())
+        .map(|e| (e.id.as_str(), e))
+        .collect();
+    let mut path = Vec::new();
+    let mut cur = leaf.and_then(|l| by_id.get(l).copied());
+    while let Some(e) = cur {
+        path.push(e);
+        cur = e.parent_id.as_deref().and_then(|p| by_id.get(p).copied());
+    }
+    path.reverse();
+    path
+}
+
 impl Live {
     /// The context at the last tree entry.
     pub fn project(entries: &[Entry]) -> Self {
@@ -54,18 +71,7 @@ impl Live {
         for e in entries.iter().filter(|e| e.record.is_meta()) {
             live.apply(e);
         }
-        let by_id: HashMap<&str, &Entry> = entries
-            .iter()
-            .filter(|e| !e.record.is_meta())
-            .map(|e| (e.id.as_str(), e))
-            .collect();
-        let mut path = Vec::new();
-        let mut cur = leaf.and_then(|l| by_id.get(l).copied());
-        while let Some(e) = cur {
-            path.push(e);
-            cur = e.parent_id.as_deref().and_then(|p| by_id.get(p).copied());
-        }
-        for e in path.into_iter().rev() {
+        for e in path_to(entries, leaf) {
             live.apply(e);
         }
         live.repair_dangling();

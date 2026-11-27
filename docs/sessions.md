@@ -76,6 +76,29 @@ When a session is opened, its history is read from the store. Tool calls left wi
 
 Stores implement `Store`: `JsonlStore` writes one file per session, `MemoryStore` keeps them in memory. `rt.store().list()` lists sessions, with the agent named in each and when it last changed.
 
+### Going back
+
+`Session::path` is the current branch, from the first entry to the one the next message follows. To go back to before a message, branch to that message's parent: `session.branch(entry.parent_id.clone())`.
+
+The files can go back too. With the `snapshots` feature (the `manifatura-snapshots` crate), a hook snapshots the working directory as each turn starts, as a git tree in a repository of its own (never the project's `.git`; what `.gitignore` leaves out is left out), and records it in the session:
+
+```rust
+use manifatura::snapshots::{Snapshots, before};
+
+let snapshots = Snapshots::new(data_dir.join("snapshots.git"));
+let agent = Agent::new("…").hooks(snapshots.hooks());
+
+// Later: the files as they were before message `id`, and the conversation too.
+let path = session.path().await?;
+if let Some(tree) = before(&path, &id) {
+    let restored = snapshots.restore(env, &tree).await?; // files changed since written back, new ones removed
+}
+let parent = path.iter().find(|e| e.id == id).and_then(|e| e.parent_id.clone());
+session.branch(parent).await?;
+```
+
+`Snapshots::changes` lists what differs from a snapshot, for a preview. Snapshots run `git` through the env; for a repository in a directory a sandbox keeps commands from writing to, use `Snapshots::unsandboxed(true)` on an env that allows it.
+
 ## Compaction
 
 Nothing compacts by itself. When the context grows too long, a compaction summarises older messages and keeps recent ones:

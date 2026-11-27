@@ -55,6 +55,7 @@ jobs:
           cargo check -p manifatura --no-default-features --features exec
           cargo check -p manifatura --no-default-features --features sandbox
           cargo check -p manifatura --no-default-features --features policy
+          cargo check -p manifatura --no-default-features --features snapshots
           cargo check -p manifatura-tools --no-default-features --features pty
           cargo check -p manifatura-tools --no-default-features
           cargo check -p manifatura-agent

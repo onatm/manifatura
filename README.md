@@ -71,6 +71,7 @@ manifatura needs Rust 1.91 or newer. `Local` and the `bash` tool run on Unix: Li
 | `store-jsonl` | yes | `manifatura::store`: sessions as JSON lines |
 | `tools` | yes | `manifatura::tools`: `read`, `edit`, `apply_patch`, `grep`, `glob`, `bash` and `Local` |
 | `subagents` | no | `manifatura::subagents`: the `task` tool and child sessions |
+| `snapshots` | no | `manifatura::snapshots`: the files as each turn found them, to restore later |
 | `policy` | no | `manifatura::policy`: allow, ask and deny rules for tools and shell command prefixes |
 | `sandbox` | no | `manifatura::sandbox`: an env whose commands run in a sandbox (macOS Seatbelt, Linux bubblewrap), writing only to the workspace, without the network |
 | `exec` | no | `manifatura::exec`: `exec_command` and `write_stdin`, commands that keep running, and terminals for `Local` |
@@ -131,6 +132,7 @@ Hooks registered on the runtime run before the agent's own, each in the order ad
 | [`manifatura-auth`](https://docs.rs/manifatura-auth) | Signing in to a model vendor: OpenAI's Sign in with ChatGPT |
 | [`manifatura-store`](https://docs.rs/manifatura-store) | Sessions as JSON lines |
 | [`manifatura-exec`](https://docs.rs/manifatura-exec) | `exec_command` and `write_stdin`: commands that keep running in the background |
+| [`manifatura-snapshots`](https://docs.rs/manifatura-snapshots) | Workspace snapshots per turn, in a git repository of their own |
 | [`manifatura-policy`](https://docs.rs/manifatura-policy) | Approval rules for tools and shell commands, split with tree-sitter-bash |
 | [`manifatura-sandbox`](https://docs.rs/manifatura-sandbox) | A sandboxed env: commands under macOS Seatbelt or Linux bubblewrap |
 | [`manifatura-tools`](https://docs.rs/manifatura-tools) | `read`, `edit`, `apply_patch`, `grep`, `glob`, `bash`, script tools and `Local` |

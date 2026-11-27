@@ -12,6 +12,7 @@ members = [
     "crates/manifatura-providers",
     "crates/manifatura-sandbox",
     "crates/manifatura-skills",
+    "crates/manifatura-snapshots",
     "crates/manifatura-store",
     "crates/manifatura-subagents",
     "crates/manifatura-tools",
@@ -39,6 +40,7 @@ manifatura-policy = { version = "0.3.0", path = "crates/manifatura-policy" }
 manifatura-providers = { version = "0.3.0", path = "crates/manifatura-providers", default-features = false }
 manifatura-sandbox = { version = "0.3.0", path = "crates/manifatura-sandbox" }
 manifatura-skills = { version = "0.3.0", path = "crates/manifatura-skills" }
+manifatura-snapshots = { version = "0.3.0", path = "crates/manifatura-snapshots" }
 manifatura-store = { version = "0.3.0", path = "crates/manifatura-store" }
 manifatura-subagents = { version = "0.3.0", path = "crates/manifatura-subagents" }
 manifatura-tools = { version = "0.3.0", path = "crates/manifatura-tools" }

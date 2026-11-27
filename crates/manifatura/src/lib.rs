@@ -18,6 +18,7 @@
 //! | `mcp` | [`mcp`]: MCP servers' tools, over stdio or HTTP |
 //! | `exec` | [`exec`]: `exec_command` and `write_stdin`, commands that keep running in the background (with `tools`, terminals for `tools::Local`) |
 //! | `policy` | [`policy`]: allow, ask and deny rules for tools and shell command prefixes, asking through [`kit::Approvals`] |
+//! | `snapshots` | [`snapshots`]: the files as each turn found them, in a git repository of their own, to restore later |
 //! | `sandbox` | [`sandbox`]: an env whose commands run in a sandbox (macOS Seatbelt, Linux bubblewrap), writing only to the workspace, without the network |
 //! | `auth` | [`auth`]: signing in to a model vendor, such as OpenAI's Sign in with ChatGPT for the user's plan |
 //! | `testing` | `testing`: a scripted provider for tests |
@@ -61,6 +62,9 @@ pub use manifatura_sandbox as sandbox;
 
 #[cfg(feature = "policy")]
 pub use manifatura_policy as policy;
+
+#[cfg(feature = "snapshots")]
+pub use manifatura_snapshots as snapshots;
 
 pub use schemars;
 pub use serde_json;

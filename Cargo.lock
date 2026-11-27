@@ -1165,6 +1165,7 @@ dependencies = [
  "manifatura-providers",
  "manifatura-sandbox",
  "manifatura-skills",
+ "manifatura-snapshots",
  "manifatura-store",
  "manifatura-subagents",
  "manifatura-tools",
@@ -1297,6 +1298,16 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "tokio",
+]
+
+[[package]]
+name = "manifatura-snapshots"
+version = "0.3.0"
+dependencies = [
+ "manifatura-agent",
+ "manifatura-tools",
+ "serde_json",
  "tokio",
 ]
 
