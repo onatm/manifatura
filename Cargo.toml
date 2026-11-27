@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT"
@@ -23,14 +23,14 @@ keywords = ["agent", "llm", "ai", "tools", "hooks"]
 categories = ["asynchronous", "development-tools"]
 
 [workspace.dependencies]
-manifatura = { version = "0.1.0", path = "crates/manifatura" }
-manifatura-agent = { version = "0.1.0", path = "crates/manifatura-agent" }
-manifatura-kit = { version = "0.1.0", path = "crates/manifatura-kit" }
-manifatura-mcp = { version = "0.1.0", path = "crates/manifatura-mcp" }
-manifatura-models = { version = "0.1.0", path = "crates/manifatura-models", default-features = false }
-manifatura-skills = { version = "0.1.0", path = "crates/manifatura-skills" }
-manifatura-store = { version = "0.1.0", path = "crates/manifatura-store" }
-manifatura-tools = { version = "0.1.0", path = "crates/manifatura-tools" }
+manifatura = { version = "0.2.0", path = "crates/manifatura" }
+manifatura-agent = { version = "0.2.0", path = "crates/manifatura-agent" }
+manifatura-kit = { version = "0.2.0", path = "crates/manifatura-kit" }
+manifatura-mcp = { version = "0.2.0", path = "crates/manifatura-mcp" }
+manifatura-models = { version = "0.2.0", path = "crates/manifatura-models", default-features = false }
+manifatura-skills = { version = "0.2.0", path = "crates/manifatura-skills" }
+manifatura-store = { version = "0.2.0", path = "crates/manifatura-store" }
+manifatura-tools = { version = "0.2.0", path = "crates/manifatura-tools" }
 async-trait = "0.1.92"
 futures-util = { version = "0.3.34", default-features = false, features = ["std", "alloc"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "stream"] }

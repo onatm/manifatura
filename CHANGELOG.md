@@ -2,7 +2,7 @@
 
 All notable changes are recorded here. The project follows [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the API.
 
-## Unreleased
+## 0.2.0
 
 - `manifatura-skills`, new, as `manifatura::skills` behind the `skills` feature (on by default): Agent Skills. Skills are found in `.agents/skills` (project and home), other directories and built into the app, with project skills taking precedence; `SystemPrompt::skills` (from `SystemPromptExt`) lists them in the prompt, the `skill` tool loads one, and `SkillSet::activation` serves `/name` commands.
 - `manifatura`: `prelude`, the names most programs use, following the features.
