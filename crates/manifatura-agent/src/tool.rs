@@ -147,6 +147,8 @@ struct ToolInner {
 struct Flags {
     sequential: bool,
     deferred: bool,
+    /// Results stay relevant for the rest of the task, so compaction keeps them whole.
+    keep_results: bool,
     /// Guidance for the system prompt on when and how to use the tool.
     guideline: Option<String>,
 }
@@ -192,6 +194,11 @@ impl Tool {
         self.with_flags(|f| f.deferred = deferred)
     }
 
+    /// The same tool, with its results kept whole or not (see [`ToolBuilder::keep_results`]).
+    pub fn with_keep_results(&self, keep: bool) -> Tool {
+        self.with_flags(|f| f.keep_results = keep)
+    }
+
     /// The same tool with other prompt guidance (see [`ToolBuilder::guideline`]).
     pub fn with_guideline(&self, text: impl Into<String>) -> Tool {
         let text = text.into();
@@ -202,6 +209,12 @@ impl Tool {
     /// [`ToolBuilder::deferred`]).
     pub fn is_deferred(&self) -> bool {
         self.0.flags.deferred
+    }
+
+    /// Whether the tool's results stay relevant for the rest of the task (see
+    /// [`ToolBuilder::keep_results`]).
+    pub fn keeps_results(&self) -> bool {
+        self.0.flags.keep_results
     }
 
     /// Guidance for the system prompt, if the tool has any. The loop does not send it; an app
@@ -264,6 +277,14 @@ impl ToolBuilder {
     /// `kit::catalog`, which adds tools to find and run deferred ones).
     pub fn deferred(mut self) -> Self {
         self.flags.deferred = true;
+        self
+    }
+
+    /// Its results stay relevant for the rest of the task (instructions, a plan, a spec), so
+    /// hooks that shorten old tool results, such as `kit::compaction::trim_results`, leave
+    /// them whole. The loop itself does nothing with the flag.
+    pub fn keep_results(mut self) -> Self {
+        self.flags.keep_results = true;
         self
     }
 

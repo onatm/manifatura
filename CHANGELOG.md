@@ -2,6 +2,13 @@
 
 All notable changes are recorded here. The project follows [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the API.
 
+## Unreleased
+
+- `manifatura-skills`, new, as `manifatura::skills` behind the `skills` feature (on by default): Agent Skills. Skills are found in `.agents/skills` (project and home), other directories and built into the app, with project skills taking precedence; `SystemPrompt::skills` (from `SystemPromptExt`) lists them in the prompt, the `skill` tool loads one, and `SkillSet::activation` serves `/name` commands.
+- `manifatura`: `prelude`, the names most programs use, following the features.
+- `manifatura-agent`: `ToolBuilder::keep_results` marks a tool whose results stay relevant for the rest of the task (`Tool::keeps_results`, `Tool::with_keep_results`).
+- `manifatura-kit`: `compaction::trim_results` leaves the results of such tools whole. `SystemPrompt::section` ignores empty text.
+
 ## 0.1.0
 
 The first release.

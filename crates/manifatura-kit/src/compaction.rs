@@ -151,17 +151,34 @@ pub fn auto(threshold: f32, compactor: Arc<dyn Compactor>) -> Hooks {
 
 /// In what is sent (the session keeps the originals): tool results longer than `max_chars`
 /// before the most recent `keep_recent` tokens shrink to their first 200 characters and a note.
+/// Results of tools that [keep their results](manifatura_agent::ToolBuilder::keep_results)
+/// stay whole.
 pub fn trim_results(keep_recent: u64, max_chars: usize) -> Hooks {
-    Hooks::new().on(move |mut e: hook::Context, _cx| async move {
+    Hooks::new().on(move |mut e: hook::Context, cx| async move {
         let end = recent_start(&e.messages, keep_recent);
+        let kept: Vec<String> = e.messages[..end]
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|c| match c {
+                Content::ToolCall { id, name, .. }
+                    if cx.tool(name).is_some_and(|t| t.keeps_results()) =>
+                {
+                    Some(id.clone())
+                }
+                _ => None,
+            })
+            .collect();
         for m in e.messages[..end]
             .iter_mut()
             .filter(|m| m.role == Role::Tool)
         {
             for c in &mut m.content {
-                if let Content::ToolResult { output, .. } = c
+                if let Content::ToolResult {
+                    call_id, output, ..
+                } = c
                     && output.len() > max_chars
                     && !output.contains(TRIM_MARK)
+                    && !kept.contains(call_id)
                 {
                     *output = trimmed(output);
                 }

@@ -6,6 +6,7 @@ members = [
     "crates/manifatura-kit",
     "crates/manifatura-mcp",
     "crates/manifatura-models",
+    "crates/manifatura-skills",
     "crates/manifatura-store",
     "crates/manifatura-tools",
     "examples",
@@ -27,6 +28,7 @@ manifatura-agent = { version = "0.1.0", path = "crates/manifatura-agent" }
 manifatura-kit = { version = "0.1.0", path = "crates/manifatura-kit" }
 manifatura-mcp = { version = "0.1.0", path = "crates/manifatura-mcp" }
 manifatura-models = { version = "0.1.0", path = "crates/manifatura-models", default-features = false }
+manifatura-skills = { version = "0.1.0", path = "crates/manifatura-skills" }
 manifatura-store = { version = "0.1.0", path = "crates/manifatura-store" }
 manifatura-tools = { version = "0.1.0", path = "crates/manifatura-tools" }
 async-trait = "0.1.92"
@@ -36,6 +38,7 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+serde_norway = "0.9.42"
 tokio = { version = "1.53.3", default-features = false }
 
 [profile.release]

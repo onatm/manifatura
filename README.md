@@ -129,6 +129,7 @@ The guides are on [manifatura.dev](https://manifatura.dev), and in [`docs/`](doc
 - [Hooks](docs/hooks.md): every point in the loop, and recipes
 - [Models](docs/models.md): providers, and writing your own
 - [System prompts](docs/system-prompts.md): `AGENTS.md` files, tool guidelines, keeping the prompt cache warm
+- [Skills](docs/skills.md): Agent Skills from `.agents/skills` and your own, loaded when a task calls for them (`skills` feature)
 - [API reference](https://docs.rs/manifatura) on docs.rs
 
 ## Used by

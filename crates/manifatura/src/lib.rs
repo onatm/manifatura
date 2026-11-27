@@ -12,8 +12,11 @@
 //! | `models-openai` (default) | [`models`]: llama.cpp and other OpenAI-compatible servers |
 //! | `store-jsonl` (default) | [`store`] |
 //! | `tools` (default) | [`tools`]: `read`, `edit`, `grep`, `glob`, `bash` and [`tools::Local`], the env on this machine |
+//! | `skills` (default) | [`skills`]: [Agent Skills](https://agentskills.io), a catalog for the prompt and a `skill` tool |
 //! | `mcp` | [`mcp`]: MCP servers' tools, over stdio or HTTP |
 //! | `testing` | `testing`: a scripted provider for tests |
+//!
+//! [`prelude`] holds the names most programs use, following the features.
 
 #![warn(missing_debug_implementations, missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -35,5 +38,24 @@ pub use manifatura_tools as tools;
 #[cfg(feature = "mcp")]
 pub use manifatura_mcp as mcp;
 
+#[cfg(feature = "skills")]
+pub use manifatura_skills as skills;
+
 pub use schemars;
 pub use serde_json;
+
+/// The names most programs use, in one import: `use manifatura::prelude::*;`. What it brings in
+/// follows the features: with `skills`, [`SystemPromptExt`](skills::SystemPromptExt) gives
+/// `SystemPrompt` its `skills` method.
+pub mod prelude {
+    pub use manifatura_agent::{
+        Agent, Env, Event, Hooks, Message, Runtime, Session, SessionId, Tool, ToolCx, ToolError,
+        ToolResult, hook,
+    };
+
+    #[cfg(feature = "kit")]
+    pub use manifatura_kit::context::{ContextFiles, SystemPrompt};
+
+    #[cfg(feature = "skills")]
+    pub use manifatura_skills::{SkillSet, Skills, SystemPromptExt};
+}

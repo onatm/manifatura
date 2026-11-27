@@ -13,12 +13,13 @@ readme = "../../README.md"
 documentation = "https://docs.rs/manifatura"
 
 [features]
-default = ["kit", "models-openai", "store-jsonl", "tools"]
+default = ["kit", "models-openai", "skills", "store-jsonl", "tools"]
 kit = ["dep:manifatura-kit"]
 models-openai = ["dep:manifatura-models", "manifatura-models/openai"]
 store-jsonl = ["dep:manifatura-store"]
 tools = ["dep:manifatura-tools"]
 mcp = ["dep:manifatura-mcp"]
+skills = ["dep:manifatura-skills"]
 testing = ["manifatura-agent/testing"]
 
 [dependencies]
@@ -26,6 +27,7 @@ manifatura-agent.workspace = true
 manifatura-kit = { workspace = true, optional = true }
 manifatura-mcp = { workspace = true, optional = true }
 manifatura-models = { workspace = true, optional = true }
+manifatura-skills = { workspace = true, optional = true }
 manifatura-store = { workspace = true, optional = true }
 manifatura-tools = { workspace = true, optional = true }
 schemars.workspace = true

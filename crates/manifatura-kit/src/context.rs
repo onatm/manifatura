@@ -243,9 +243,13 @@ impl SystemPrompt {
         self
     }
 
-    /// Any other text, after the context files (e.g. a prompt the user appends).
+    /// Any other text, after the context files (e.g. a prompt the user appends, or the catalog
+    /// of `manifatura-skills`). Empty text adds nothing.
     pub fn section(mut self, text: impl Into<String>) -> Self {
-        self.sections.push(text.into());
+        let text = text.into();
+        if !text.trim().is_empty() {
+            self.sections.push(text);
+        }
         self
     }
 

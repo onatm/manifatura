@@ -61,7 +61,7 @@ Working directory: /home/me/shop
 Current date: 2026-11-24
 ```
 
-Tools carry their own guideline (`Tool::new(…).guideline("…")`), so the prompt describes exactly the tools the agent has; deferred tools add none, as the model does not see them. `section(text)` adds a block of the app's own, and `fact(label, value)` another line at the end. The app passes the date, so nothing in `kit` reads the clock.
+Tools carry their own guideline (`Tool::new(…).guideline("…")`), so the prompt describes exactly the tools the agent has; deferred tools add none, as the model does not see them. `section(text)` adds a block of the app's own, and with the `skills` feature `skills(&set)` the catalog of [skills](skills.md), and `fact(label, value)` another line at the end. The app passes the date, so nothing in `kit` reads the clock.
 
 ## Keeping the prompt cache warm
 

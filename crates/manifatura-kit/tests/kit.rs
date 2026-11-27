@@ -99,6 +99,32 @@ async fn trim_results_shrinks_old_results_in_the_request_only() {
 }
 
 #[tokio::test]
+async fn trim_results_leaves_tools_that_keep_their_results_whole() {
+    let tool = |name: &str, keep: bool| {
+        let t = Tool::new(name, "Returns a lot.");
+        let t = if keep { t.keep_results() } else { t };
+        t.run_json(json!({"type":"object"}), |_, _| async {
+            Ok("z".repeat(3_000))
+        })
+    };
+    let p = ScriptedProvider::new()
+        .call("plan", json!({}))
+        .call("big", json!({}))
+        .call("big", json!({}))
+        .text("done");
+    let rt = runtime(&p);
+    let agent = Agent::new("x")
+        .tool(tool("plan", true))
+        .tool(tool("big", false))
+        .hooks(compaction::trim_results(500, 600));
+    let s = rt.session(&agent, SessionId::new());
+    s.prompt("go").await.unwrap().wait().await.unwrap();
+    let last = results(p.requests().last().unwrap());
+    assert_eq!(last[0].1.len(), 3_000, "the plan is kept");
+    assert!(last[1].1.contains("[tool output trimmed"));
+}
+
+#[tokio::test]
 async fn on_overflow_compacts_once_per_turn() {
     let overflow = || Response::error(ErrorKind::ContextOverflow, "too long");
     let p = ScriptedProvider::new()

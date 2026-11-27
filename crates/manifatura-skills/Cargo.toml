@@ -1,0 +1,28 @@
+[package]
+name = "manifatura-skills"
+description = "Agent Skills for manifatura: skills found in .agents/skills and elsewhere, a catalog for the prompt and a tool that loads one."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-skills"
+
+[dependencies]
+manifatura-agent.workspace = true
+manifatura-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+manifatura-agent = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

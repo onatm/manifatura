@@ -78,6 +78,7 @@ A tool that needs a person (a confirmation, a choice) gets a handle to the app's
 | --- | --- |
 | `.sequential()` | Never runs alongside other calls of the same batch. Calls run in parallel otherwise. |
 | `.deferred()` | Not offered to the model, but runs when a call names it (see the catalog below). |
+| `.keep_results()` | Its results stay relevant for the rest of the task, so `kit::compaction::trim_results` leaves them whole (the `skill` tool of [skills](skills.md) does this). |
 | `.guideline(text)` | A line for the system prompt on when and how to use the tool (see [system prompts](system-prompts.md)). |
 
 A tool returning `ToolResult::ok(text).terminate()` ends the turn after its batch, without another model call.
