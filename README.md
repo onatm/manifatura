@@ -71,6 +71,7 @@ manifatura needs Rust 1.91 or newer. `Local` and the `bash` tool run on Unix: Li
 | `store-jsonl` | yes | `manifatura::store`: sessions as JSON lines |
 | `tools` | yes | `manifatura::tools`: `read`, `edit`, `apply_patch`, `grep`, `glob`, `bash` and `Local` |
 | `subagents` | no | `manifatura::subagents`: the `task` tool and child sessions |
+| `exec` | no | `manifatura::exec`: `exec_command` and `write_stdin`, commands that keep running, and terminals for `Local` |
 | `mcp` | no | `manifatura::mcp`: MCP servers' tools, over stdio or HTTP |
 | `testing` | no | `manifatura::testing`: a scripted provider for tests |
 
@@ -127,6 +128,7 @@ Hooks registered on the runtime run before the agent's own, each in the order ad
 | [`manifatura-providers`](https://docs.rs/manifatura-providers) | llama.cpp and other OpenAI-compatible providers, and OpenAI's Responses API, streamed over SSE |
 | [`manifatura-auth`](https://docs.rs/manifatura-auth) | Signing in to a model vendor: OpenAI's Sign in with ChatGPT |
 | [`manifatura-store`](https://docs.rs/manifatura-store) | Sessions as JSON lines |
+| [`manifatura-exec`](https://docs.rs/manifatura-exec) | `exec_command` and `write_stdin`: commands that keep running in the background |
 | [`manifatura-tools`](https://docs.rs/manifatura-tools) | `read`, `edit`, `apply_patch`, `grep`, `glob`, `bash`, script tools and `Local` |
 | [`manifatura-mcp`](https://docs.rs/manifatura-mcp) | MCP servers' tools, over stdio or streamable HTTP |
 
@@ -136,7 +138,7 @@ The guides are on [manifatura.dev](https://manifatura.dev), and in [`docs/`](doc
 
 - [Getting started](docs/getting-started.md)
 - [Agents and sessions](docs/sessions.md): turns, events, steering, resuming, branching, compaction
-- [Tools](docs/tools.md): your own, the basic ones, MCP servers, deferred tools, environments
+- [Tools](docs/tools.md): your own, the basic ones, commands that keep running, MCP servers, deferred tools, environments
 - [Hooks](docs/hooks.md): every point in the loop, and recipes
 - [Models](docs/models.md): providers, and writing your own
 - [System prompts](docs/system-prompts.md): `AGENTS.md` files, tool guidelines, keeping the prompt cache warm

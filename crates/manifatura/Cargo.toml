@@ -23,11 +23,13 @@ mcp = ["dep:manifatura-mcp"]
 skills = ["dep:manifatura-skills"]
 subagents = ["dep:manifatura-subagents"]
 auth = ["dep:manifatura-auth", "providers-responses"]
+exec = ["dep:manifatura-exec", "manifatura-tools?/pty"]
 testing = ["manifatura-agent/testing"]
 
 [dependencies]
 manifatura-agent.workspace = true
 manifatura-auth = { workspace = true, optional = true }
+manifatura-exec = { workspace = true, optional = true }
 manifatura-kit = { workspace = true, optional = true }
 manifatura-mcp = { workspace = true, optional = true }
 manifatura-providers = { workspace = true, optional = true }

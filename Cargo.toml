@@ -4,6 +4,7 @@ members = [
     "crates/manifatura",
     "crates/manifatura-agent",
     "crates/manifatura-auth",
+    "crates/manifatura-exec",
     "crates/manifatura-kit",
     "crates/manifatura-mcp",
     "crates/manifatura-providers",
@@ -28,6 +29,7 @@ categories = ["asynchronous", "development-tools"]
 manifatura = { version = "0.3.0", path = "crates/manifatura" }
 manifatura-agent = { version = "0.3.0", path = "crates/manifatura-agent" }
 manifatura-auth = { version = "0.3.0", path = "crates/manifatura-auth" }
+manifatura-exec = { version = "0.3.0", path = "crates/manifatura-exec" }
 manifatura-kit = { version = "0.3.0", path = "crates/manifatura-kit" }
 manifatura-mcp = { version = "0.3.0", path = "crates/manifatura-mcp" }
 manifatura-providers = { version = "0.3.0", path = "crates/manifatura-providers", default-features = false }

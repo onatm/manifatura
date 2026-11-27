@@ -16,6 +16,7 @@
 //! | `skills` (default) | [`skills`]: [Agent Skills](https://agentskills.io), a catalog for the prompt and a `skill` tool |
 //! | `subagents` | [`subagents`]: a `task` tool that hands a self-contained task to a subagent |
 //! | `mcp` | [`mcp`]: MCP servers' tools, over stdio or HTTP |
+//! | `exec` | [`exec`]: `exec_command` and `write_stdin`, commands that keep running in the background (with `tools`, terminals for `tools::Local`) |
 //! | `auth` | [`auth`]: signing in to a model vendor, such as OpenAI's Sign in with ChatGPT for the user's plan |
 //! | `testing` | `testing`: a scripted provider for tests |
 //!
@@ -49,6 +50,9 @@ pub use manifatura_subagents as subagents;
 
 #[cfg(feature = "auth")]
 pub use manifatura_auth as auth;
+
+#[cfg(feature = "exec")]
+pub use manifatura_exec as exec;
 
 pub use schemars;
 pub use serde_json;

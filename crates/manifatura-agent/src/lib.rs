@@ -38,7 +38,7 @@ mod types;
 pub use agent::Agent;
 pub use compact::{CompactCx, CompactPlan, CompactReport, Compactor};
 pub use context::estimate_tokens;
-pub use env::{DirEntry, Env, ExecSpec, FileKind, Process, Stat};
+pub use env::{DirEntry, Env, ExecSpec, FileKind, Process, ProcessInput, Stat, TtySize};
 pub use event::{Event, Outcome};
 pub use hook::HookEvent;
 pub use hooks::{HookCx, Hooks};

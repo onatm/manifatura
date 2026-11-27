@@ -139,6 +139,37 @@ let rt = Runtime::builder().provider(providers::from_env()?).env(env).build();
 
 A sandbox, a container or a remote machine is another `Env` implementation; the tools do not change. Paths the model gives resolve against the env's working directory, and `Local` does not stop them leaving it: isolation belongs to the env.
 
+What an env implements for commands:
+
+- `exec(spec)` starts one, with its output going to the files `spec` names (`stdout` and `stderr` may be the same file, for both streams in order). `ExecSpec::tty` asks for a terminal of a given size; an env without terminals refuses it. `Local` has them with `manifatura-tools`' `pty` feature.
+- The returned `Process` waits, kills the command and everything it started, interrupts it (`SIGINT`; by default, a kill), and hands out its terminal's input once (`take_input`).
+- `read_range(path, offset, max)` and `read_tail(path, max)` read part of a file, so output is read where it is written, a piece at a time. The defaults read the whole file; an env on another machine implements them to send only the piece.
+
+## Commands that keep running
+
+`bash` waits for a command, and leaves one that takes too long in a job directory the model has to inspect itself. The `exec` feature (the `manifatura-exec` crate) has tools for commands that keep running, in the shapes OpenAI's models are trained on (those of OpenAI's Codex):
+
+```rust
+use manifatura::exec::Exec;
+
+let exec = Exec::new();
+let agent = Agent::new("You are a coding agent.")
+    .tools(tools::by_name(&["read", "apply_patch", "grep", "glob"])?)
+    .tools(exec.tools())  // exec_command, write_stdin
+    .hooks(exec.hooks()); // tells the model when a background command exits
+```
+
+| Tool | What it does |
+| --- | --- |
+| `exec_command` | Runs `cmd` (with `workdir`, and `tty: true` for a terminal) and returns its output when it exits, or after `yield_time_ms` (10 s by default) with a session ID, leaving it running. |
+| `write_stdin` | Types `chars` into a session's terminal, or with empty `chars` waits for more output (at least 5 s, until it exits); `"\u0003"` interrupts it. Returns only the output the model has not seen. |
+
+Each result says how long the call took, whether the command exited (with its code) or still runs (with its session ID), and the output, stdout and stderr together. Output past `max_output_tokens` (10,000 by default) keeps its beginning and end. Commands get `NO_COLOR=1`, `PAGER=cat` and `GIT_PAGER=cat` (and `TERM=dumb` outside a terminal), so nothing waits for a pager.
+
+Sessions belong to the manifatura session that started them. A command whose exit the model has read is forgotten; one that exits while the model is busy elsewhere is reported in a note before its next model call, by the `Step` hook from `Exec::hooks`. Each session keeps 64 commands at most (`Exec::max_processes`); starting another drops the least recently used, finished ones first, and kills it if it still runs. An abort during `exec_command` kills that command; dropping the last handle to the `Exec` kills them all.
+
+For an app, `Exec::subscribe` streams every start and exit, `Exec::processes(session)` lists what a session keeps, and `Exec::kill(session, id)` stops one.
+
 ## MCP servers
 
 With the `mcp` feature (the `manifatura-mcp` crate), an MCP server's tools become manifatura tools named `<server>__<tool>`. A server is reached at a URL, over streamable HTTP, or run as a program, over stdio:

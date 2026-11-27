@@ -19,6 +19,8 @@ mod files;
 #[cfg(feature = "local")]
 mod local;
 mod patch;
+#[cfg(feature = "pty")]
+mod pty;
 mod script;
 mod search;
 pub mod truncate;

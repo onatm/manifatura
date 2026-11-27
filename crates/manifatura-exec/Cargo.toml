@@ -1,0 +1,29 @@
+[package]
+name = "manifatura-exec"
+description = "Commands that keep running for manifatura: exec_command and write_stdin, with background sessions, terminals and exit notes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-exec"
+
+[dependencies]
+manifatura-agent.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strip-ansi-escapes = "0.2.1"
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+
+[dev-dependencies]
+manifatura-agent = { workspace = true, features = ["testing"] }
+manifatura-tools = { workspace = true, features = ["pty"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
