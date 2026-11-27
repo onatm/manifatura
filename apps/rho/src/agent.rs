@@ -19,6 +19,7 @@ use manifatura::providers::responses::Responses;
 use manifatura::sandbox::Sandbox;
 use manifatura::skills::{SkillSet, Skills, SystemPromptExt};
 use manifatura::store::JsonlStore;
+use manifatura::subagents::{Definition, Subagent, Subagents};
 use manifatura::tools::Local;
 use manifatura::{
     Abort, Agent, BoxStream, Effort, Env, Message, ModelInfo, ModelRequest, Provider, Runtime,
@@ -49,7 +50,13 @@ const ALLOWED: &[&str] = &[
     "update_plan",
     "skill",
     "find_tools",
+    "task",
 ];
+
+/// The subagents built into rho, as Markdown. Each runs rho's own agent (the same prompt and tools, so the
+/// provider's prompt cache serves it) with the file's body as its brief, calling only the tools its `tools` names
+/// and keeping the last of its `max_steps` for its report.
+const BUILTIN_AGENTS: &[&str] = &[include_str!("agents/explore.md")];
 
 /// What the screen and the command line ask for.
 #[derive(Clone, Debug)]
@@ -81,6 +88,8 @@ pub(crate) struct Prepared {
     pub(crate) files: Vec<PathBuf>,
     /// The skills the prompt lists, which `/name` also starts.
     pub(crate) skills: SkillSet,
+    /// The subagents behind the `task` tool, which `/explore` also starts.
+    pub(crate) subagents: Subagents,
     /// Where the tools act.
     pub(crate) env: Arc<Sandbox<Local>>,
     /// The sandbox, described.
@@ -163,6 +172,8 @@ pub(crate) async fn prepare(
     let mut tools = manifatura::tools::by_name(TOOLS).map_err(anyhow::Error::msg)?;
     tools.extend(exec.tools());
     tools.push(crate::plan::update_plan());
+    let subagents = subagents()?;
+    tools.push(subagents.tool());
 
     // MCP tools come after the built-ins. A server's tools are deferred unless it is `eager`: the model finds them
     // with find_tools, so their schemas stay out of the prompt until it needs them.
@@ -276,6 +287,7 @@ pub(crate) async fn prepare(
         summarizer,
         files: files.into_iter().map(|file| file.path).collect(),
         skills,
+        subagents,
         env,
         sandbox,
         servers,
@@ -289,6 +301,18 @@ pub(crate) async fn prepare(
         effort,
         account: account.email.or(Some(account.subject)),
     })
+}
+
+/// The built-in subagents, for the `task` tool and `/explore`.
+fn subagents() -> Result<Subagents> {
+    let mut list = Vec::new();
+    for text in BUILTIN_AGENTS {
+        let definition = Definition::parse(text)
+            .map_err(anyhow::Error::msg)
+            .context("a built-in subagent")?;
+        list.push(Subagent::from_definition(definition));
+    }
+    Ok(Subagents::new(list))
 }
 
 /// What asks and what may run: your rules, the project's (which may only ask and deny: a repository must not let
@@ -494,6 +518,25 @@ mod tests {
             "{problems:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn explore_reads_and_searches_within_a_budget() {
+        let explore = Definition::parse(BUILTIN_AGENTS[0]).unwrap();
+        assert_eq!(
+            explore.tools.as_deref(),
+            Some(&["read".to_owned(), "grep".into(), "glob".into()][..])
+        );
+        assert_eq!(explore.max_steps, Some(20));
+        let tool = subagents().unwrap().tool();
+        assert_eq!(tool.name(), "task");
+        assert!(
+            tool.spec()
+                .description
+                .contains("- explore: Answers one question"),
+            "{}",
+            tool.spec().description
+        );
     }
 
     #[test]

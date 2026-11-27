@@ -35,7 +35,7 @@ use tokio::sync::{broadcast, mpsc};
 use self::approval::Ask;
 use self::logs::{LogLine, Logs};
 use self::screen::ChatScreen;
-use self::view::{Activity, Item, Level, View, dim, tokens};
+use self::view::{Activity, Item, Level, View, dim, explore_message, tokens};
 use crate::agent::{
     ChatOptions, Prepared, ago, effort_label, efforts, parse_effort, recent_sessions,
 };
@@ -47,6 +47,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("/new", "", "start a new session"),
     ("/resume", "[ID]", "pick a session or open it by ID"),
     ("/sessions", "", "list this directory's sessions"),
+    (
+        "/explore",
+        "<question>",
+        "hand a question about the code to the explore subagent",
+    ),
     (
         "/compact",
         "[focus]",
@@ -134,6 +139,8 @@ struct App {
     events: Option<broadcast::Receiver<Event>>,
     approvals: Option<broadcast::Receiver<ApprovalEvent>>,
     commands: Option<broadcast::Receiver<ExecEvent>>,
+    /// A running `/explore`: its question, and what it reports.
+    exploring: Option<(String, mpsc::UnboundedReceiver<Explored>)>,
     /// The session IDs of commands left running in the background.
     background: BTreeSet<u32>,
     /// The context the last model call started with, and the window.
@@ -329,6 +336,7 @@ async fn screen(
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => app.commands = None,
                 },
+                Some(explored) = recv_explored(&mut app.exploring) => app.explored(explored).await,
                 () = app.files.receive() => {}
                 Some(line) = logs.0.recv() => app.log_line(line),
                 loaded = async { loading.as_mut().expect("checked").await }, if connecting => {
@@ -347,6 +355,25 @@ async fn screen(
     }
     drop(app);
     (id, result)
+}
+
+/// What a running `/explore` sends the screen: the lines it logs, then its report.
+enum Explored {
+    Line(String),
+    Done(manifatura::ToolResult),
+}
+
+/// The turn and call ids `/explore` shows its work under, and its subagent.
+const EXPLORE: &str = "explore";
+
+/// The running `/explore`'s next message, or never when none runs.
+async fn recv_explored(
+    exploring: &mut Option<(String, mpsc::UnboundedReceiver<Explored>)>,
+) -> Option<Explored> {
+    match exploring {
+        Some((_, rx)) => rx.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// The next message of `rx`, or never when there is none.
@@ -392,6 +419,7 @@ impl App {
             events: None,
             approvals: None,
             commands: None,
+            exploring: None,
             background: BTreeSet::new(),
             context: None,
             model: options.model.clone().unwrap_or_default(),
@@ -542,7 +570,11 @@ impl App {
 
     /// Whether an exit in the background starts a turn: only when nothing runs and nobody is being asked.
     fn wakes(&self) -> bool {
-        self.ready.is_some() && !self.view.is_busy() && self.asks.is_empty() && self.abort.is_none()
+        self.ready.is_some()
+            && !self.view.is_busy()
+            && self.asks.is_empty()
+            && self.abort.is_none()
+            && self.exploring.is_none()
     }
 
     async fn input(&mut self, input: Input) {
@@ -801,6 +833,13 @@ impl App {
             self.view.notice(Level::Info, "still connecting");
             return;
         };
+        if self.exploring.is_some() {
+            self.view.notice(
+                Level::Info,
+                "explore is still working; send this once it reports, or press Esc to stop it",
+            );
+            return;
+        }
         if self.view.is_busy() {
             // Sent while the agent works: it reads it before its next step.
             match ready.session.steer(text) {
@@ -1066,6 +1105,11 @@ impl App {
                 },
                 Err(error) => self.view.notice(Level::Warn, error),
             },
+            "/explore" if argument.is_empty() => self.view.notice(
+                Level::Info,
+                "/explore <question>: what to find out about the code",
+            ),
+            "/explore" => self.explore(argument, line),
             "/compact" => {
                 let focus = (!argument.is_empty()).then(|| argument.to_owned());
                 self.view.activity = Activity::Compacting;
@@ -1133,6 +1177,78 @@ impl App {
         };
         self.send(line.to_owned(), format!("{instructions}\n\n{request}"))
             .await;
+    }
+
+    /// Starts the explore subagent on `question` from `/explore question`, without waiting for the model to
+    /// choose it. The transcript shows it as a task; its report then goes to the agent with the question.
+    fn explore(&mut self, question: &str, line: &str) {
+        let Some(ready) = &self.ready else { return };
+        self.view.push(Item::User(line.to_owned()));
+        self.view.apply(&Event::TurnStarted {
+            turn: EXPLORE.into(),
+        });
+        self.view.apply(&Event::ActionStarted {
+            turn: EXPLORE.into(),
+            call_id: EXPLORE.into(),
+            name: manifatura::subagents::TASK_TOOL.into(),
+            input: serde_json::json!({ "agent": EXPLORE, "description": question }),
+        });
+        let abort = Abort::new();
+        self.abort = Some(abort.clone());
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (subagents, session, prompt) = (
+            ready.subagents.clone(),
+            ready.session.clone(),
+            question.to_owned(),
+        );
+        tokio::spawn(async move {
+            let lines = tx.clone();
+            let log = move |line| {
+                let _ = lines.send(Explored::Line(line));
+            };
+            let report = subagents.run(&session, EXPLORE, &prompt, &abort, log).await;
+            let _ = tx.send(Explored::Done(report));
+        });
+        self.exploring = Some((question.to_owned(), rx));
+    }
+
+    async fn explored(&mut self, explored: Explored) {
+        let report = match explored {
+            Explored::Line(text) => {
+                return self.view.apply(&Event::ActionLog {
+                    turn: EXPLORE.into(),
+                    call_id: EXPLORE.into(),
+                    text,
+                });
+            }
+            Explored::Done(report) => report,
+        };
+        let Some((question, _)) = self.exploring.take() else {
+            return;
+        };
+        let aborted = self.abort.take().is_some_and(|abort| abort.is_aborted());
+        self.view.apply(&Event::ActionResult {
+            turn: EXPLORE.into(),
+            call_id: EXPLORE.into(),
+            name: manifatura::subagents::TASK_TOOL.into(),
+            output: report.output.clone(),
+            is_error: report.is_error,
+        });
+        let outcome = if aborted {
+            manifatura::Outcome::Aborted
+        } else {
+            manifatura::Outcome::Completed
+        };
+        self.view.apply(&Event::TurnCompleted {
+            turn: EXPLORE.into(),
+            outcome,
+            error: None,
+            usage: Default::default(),
+        });
+        if !aborted {
+            self.prompt(explore_message(&question, &report.output))
+                .await;
+        }
     }
 
     async fn resume(&mut self, id: SessionId) {

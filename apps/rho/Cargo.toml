@@ -15,7 +15,7 @@ clap = { version = "4.6.9", features = ["derive"] }
 crossterm = "0.29.0"
 futures-util.workspace = true
 ignore = "0.4.33"
-manifatura = { workspace = true, features = ["auth", "exec", "kit", "mcp", "policy", "sandbox", "skills", "store-jsonl", "tools"] }
+manifatura = { workspace = true, features = ["auth", "exec", "kit", "mcp", "policy", "sandbox", "skills", "store-jsonl", "subagents", "tools"] }
 nucleo-matcher = "0.3.1"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 ratatui-crossterm = { version = "0.1.2", default-features = false, features = ["scrolling-regions"] }

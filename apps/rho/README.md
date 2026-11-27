@@ -14,7 +14,9 @@ cargo run -p rho -- models           # the models your plan offers
 ## How it works
 
 - **Tools**: `read`, `grep`, `glob`, `apply_patch` (Codex's patch format), `exec_command` and `write_stdin`
-  (commands that keep running in the background), `update_plan`, skills from `.agents/skills`, and MCP servers.
+  (commands that keep running in the background), `update_plan`, `task` with an `explore` subagent (read, grep and
+  glob only, 20 steps; also `/explore <question>`), skills from `.agents/skills`, and MCP servers. A command left
+  in the background that exits while rho is idle wakes it to carry on.
 - **Sandbox**: every command runs in it (macOS Seatbelt, Linux bubblewrap): it writes only in the workspace,
   the scratch directory and `/tmp`, never to `.git`, `.agents` or `.rho`, and has no network beyond localhost.
   rho's own writes follow the same rules.
@@ -33,5 +35,5 @@ cargo run -p rho -- models           # the models your plan offers
 | `~/.config/rho/AGENTS.md`, `AGENTS.md` | Instructions, with the project's from its root down |
 | `~/.local/share/rho/sessions/<directory>` | Sessions, one JSON-lines file each |
 
-In the chat, `/help` lists the commands: `/model`, `/effort`, `/ps` and `/kill` for background commands, `/rules`,
+In the chat, `/help` lists the commands: `/model`, `/effort` (the levels the model has), `/ps` and `/kill` for background commands, `/rules`,
 `/compact`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops it.

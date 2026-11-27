@@ -418,6 +418,7 @@ fn title(name: &str) -> &str {
         "write_stdin" => "Input",
         "apply_patch" => "Patch",
         "update_plan" => "Plan",
+        "explore" => "Explore",
         other => other,
     }
 }
@@ -597,6 +598,7 @@ impl View {
             "exec_command" | "bash" => "Running",
             "write_stdin" => "Waiting on",
             "apply_patch" => "Patching",
+            "explore" => "Exploring",
             other => other,
         };
         let mut label = format!("{verb} {}", call.summary);
@@ -922,9 +924,27 @@ pub(crate) fn tokens(n: u64) -> String {
     }
 }
 
+/// What `/explore` sends the agent once the subagent has reported: the report, then the question.
+pub(crate) fn explore_message(question: &str, report: &str) -> String {
+    format!(
+        "<explore_report>\n{}\n</explore_report>\n\n{EXPLORE_NOTE}\n\n{question}",
+        report.trim()
+    )
+}
+
+const EXPLORE_NOTE: &str = "The explore subagent looked into my question; its report is above. Answer from it, and read a \
+                            file yourself only to check something it left unclear.";
+
 /// What the person typed for a user message: a skill started with `/name request` was sent as the skill's
-/// instructions and then the request, and shows as the command again.
+/// instructions and then the request, and shows as the command again; an `/explore` question with its report
+/// shows as the command.
 fn typed(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix("<explore_report>\n")
+        && let Some((_, after)) = rest.rsplit_once("\n</explore_report>\n\n")
+        && let Some(question) = after.strip_prefix(EXPLORE_NOTE)
+    {
+        return format!("/explore {}", question.trim_start());
+    }
     if text == super::WAKE {
         return "(a background command exited)".to_owned();
     }
@@ -961,11 +981,62 @@ mod tests {
             super::typed(super::super::WAKE),
             "(a background command exited)"
         );
+        let sent = super::explore_message("where is main?", "main is in src/main.rs:1\n");
+        assert_eq!(super::typed(&sent), "/explore where is main?");
     }
 
     use super::*;
     use manifatura::Usage;
     use serde_json::json;
+
+    #[test]
+    fn a_task_shows_its_subagent_and_what_it_does() {
+        let mut view = View::new();
+        let turn = "t".to_owned();
+        view.apply(&Event::TurnStarted { turn: turn.clone() });
+        view.apply(&Event::ActionStarted {
+            turn: turn.clone(),
+            call_id: "1".into(),
+            name: "task".into(),
+            input: json!({ "agent": "explore", "description": "where main is", "prompt": "Find main." }),
+        });
+        assert_eq!(view.running_label(), "Exploring where main is");
+        for text in [
+            r#"glob {"pattern":"**/*.rs"}"#,
+            r#"grep {"pattern":"fn main"}"#,
+        ] {
+            view.apply(&Event::ActionLog {
+                turn: turn.clone(),
+                call_id: "1".into(),
+                text: text.into(),
+            });
+        }
+        assert_eq!(
+            view.running_label(),
+            "Exploring where main is · Search fn main"
+        );
+        view.apply(&Event::ActionResult {
+            turn,
+            call_id: "1".into(),
+            name: "task".into(),
+            output: "main is in src/main.rs:1".into(),
+            is_error: false,
+        });
+        let items = view.take_committed();
+        let lines: Vec<String> = items[0].lines(60).iter().map(Line::to_string).collect();
+        assert_eq!(
+            lines[1..4],
+            [
+                "● Explore where main is",
+                "  ⎿ Find **/*.rs",
+                "    Search fn main"
+            ]
+        );
+        assert!(
+            lines[4].starts_with("    Done · 2 tool calls · "),
+            "{lines:?}"
+        );
+    }
 
     /// The lines a finished call shows, after starting and ending it.
     fn finished(name: &str, input: serde_json::Value, output: &str) -> Vec<String> {
