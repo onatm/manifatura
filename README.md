@@ -71,6 +71,7 @@ manifatura needs Rust 1.91 or newer. `Local` and the `bash` tool run on Unix: Li
 | `store-jsonl` | yes | `manifatura::store`: sessions as JSON lines |
 | `tools` | yes | `manifatura::tools`: `read`, `edit`, `apply_patch`, `grep`, `glob`, `bash` and `Local` |
 | `subagents` | no | `manifatura::subagents`: the `task` tool and child sessions |
+| `sandbox` | no | `manifatura::sandbox`: an env whose commands run under macOS Seatbelt, writing only to the workspace, without the network |
 | `exec` | no | `manifatura::exec`: `exec_command` and `write_stdin`, commands that keep running, and terminals for `Local` |
 | `mcp` | no | `manifatura::mcp`: MCP servers' tools, over stdio or HTTP |
 | `testing` | no | `manifatura::testing`: a scripted provider for tests |
@@ -129,6 +130,7 @@ Hooks registered on the runtime run before the agent's own, each in the order ad
 | [`manifatura-auth`](https://docs.rs/manifatura-auth) | Signing in to a model vendor: OpenAI's Sign in with ChatGPT |
 | [`manifatura-store`](https://docs.rs/manifatura-store) | Sessions as JSON lines |
 | [`manifatura-exec`](https://docs.rs/manifatura-exec) | `exec_command` and `write_stdin`: commands that keep running in the background |
+| [`manifatura-sandbox`](https://docs.rs/manifatura-sandbox) | A sandboxed env: commands under macOS Seatbelt |
 | [`manifatura-tools`](https://docs.rs/manifatura-tools) | `read`, `edit`, `apply_patch`, `grep`, `glob`, `bash`, script tools and `Local` |
 | [`manifatura-mcp`](https://docs.rs/manifatura-mcp) | MCP servers' tools, over stdio or streamable HTTP |
 

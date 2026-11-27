@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use manifatura_agent::{
-    Env, ExecSpec, Hooks, ProcessInput, SessionId, Tool, ToolCx, ToolError, TtySize, hook,
+    Env, ExecSpec, Hooks, ProcessInput, SessionId, Tool, ToolCall, ToolCx, ToolError, TtySize, hook,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -88,6 +88,8 @@ pub struct ProcessInfo {
     pub command: String,
     /// Whether it runs in a terminal.
     pub tty: bool,
+    /// Whether it runs outside the env's sandbox (see [`Exec::escalation`]).
+    pub escalated: bool,
     /// When it started.
     pub started: SystemTime,
     /// Its exit code, once it has exited.
@@ -107,6 +109,7 @@ struct Inner {
     max_processes: usize,
     shell: String,
     env: Vec<(String, String)>,
+    escalation: bool,
 }
 
 impl std::fmt::Debug for Exec {
@@ -139,6 +142,7 @@ struct Proc {
     session: SessionId,
     command: String,
     tty: bool,
+    escalated: bool,
     started: SystemTime,
     env: Arc<dyn Env>,
     output: PathBuf,
@@ -210,6 +214,7 @@ impl Exec {
                 ("PAGER".into(), "cat".into()),
                 ("GIT_PAGER".into(), "cat".into()),
             ],
+            escalation: false,
         }))
     }
 
@@ -234,6 +239,18 @@ impl Exec {
     /// `GIT_PAGER=cat` (and `TERM=dumb` outside a terminal).
     pub fn env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.inner_mut().env.push((name.into(), value.into()));
+        self
+    }
+
+    /// Lets the model ask to run a command outside the env's sandbox: `exec_command` gets
+    /// `sandbox_permissions` (`"use_default"` or `"require_escalated"`) and a
+    /// `justification`, and such a call runs with [`ExecSpec::unsandboxed`]. Only for an env
+    /// with a sandbox, and only with an approval hook that asks the user about the calls
+    /// [`is_escalation`] picks out: the env runs them outside its sandbox if it allows that at
+    /// all. A sandboxed command that fails as a sandbox would make it fail gets a hint saying
+    /// how to ask.
+    pub fn escalation(mut self, on: bool) -> Self {
+        self.inner_mut().escalation = on;
         self
     }
 
@@ -277,6 +294,7 @@ impl Exec {
                 id: p.id,
                 command: p.command.clone(),
                 tty: p.tty,
+                escalated: p.escalated,
                 started: p.started,
                 exit: p.exit_code(),
                 output: p.output.clone(),
@@ -367,7 +385,7 @@ impl Exec {
         out
     }
 
-    async fn start(&self, i: ExecInput, cx: &ToolCx) -> Result<String, ToolError> {
+    async fn start(&self, i: ExecInput, escalated: bool, cx: &ToolCx) -> Result<String, ToolError> {
         let began = Instant::now();
         let env = cx.env().clone();
         let session = cx.session_id().clone();
@@ -391,6 +409,7 @@ impl Exec {
                 stdout: output.clone(),
                 stderr: output.clone(),
                 tty: tty.then(TtySize::default),
+                unsandboxed: escalated,
             })
             .await?;
         let input = process.take_input();
@@ -429,6 +448,7 @@ impl Exec {
             session: session.clone(),
             command: i.cmd.clone(),
             tty,
+            escalated,
             started: SystemTime::now(),
             env,
             output,
@@ -474,7 +494,15 @@ impl Exec {
             self.forget(cx.session_id(), id);
             return Err(ToolError::msg("aborted; the command was killed"));
         }
-        self.report(&proc, exit, began, i.max_output_tokens).await
+        let mut report = self.report(&proc, exit, began, i.max_output_tokens).await?;
+        if self.0.escalation
+            && !escalated
+            && exit.is_some_and(|c| c != 0)
+            && looks_sandboxed(&report)
+        {
+            report.push_str(SANDBOX_HINT);
+        }
+        Ok(report)
     }
 
     async fn write(&self, i: StdinInput, cx: &ToolCx) -> Result<String, ToolError> {
@@ -564,7 +592,22 @@ impl Exec {
 
     fn exec_tool(&self) -> Tool {
         let exec = self.clone();
-        Tool::new(
+        let mut guideline = String::from(
+            "Run commands with `exec_command`. One still running after its yield time keeps \
+             running with a session ID: read its output, type into it or stop it with \
+             `write_stdin` instead of starting it again. Start servers and watchers this way, \
+             and do not end your turn while a command you still need is running.",
+        );
+        if self.0.escalation {
+            guideline.push_str(
+                " Commands run in a sandbox: they write only in the workspace and have no \
+                 network beyond localhost. When one needs more (installing dependencies, \
+                 network access, writing elsewhere), run it with sandbox_permissions \
+                 \"require_escalated\" and a one-sentence justification; the user is asked \
+                 to approve it.",
+            );
+        }
+        let tool = Tool::new(
             EXEC_TOOL,
             "Runs a shell command in the workspace and returns its output (stdout and stderr \
              together), or a session ID if it is still running after yield_time_ms. A \
@@ -572,16 +615,32 @@ impl Exec {
              session ID to read more output, type into it or interrupt it. Use tty: true for \
              programs that need a terminal (prompts, REPLs).",
         )
-        .guideline(
-            "Run commands with `exec_command`. One still running after its yield time keeps \
-             running with a session ID: read its output, type into it or stop it with \
-             `write_stdin` instead of starting it again. Start servers and watchers this way, \
-             and do not end your turn while a command you still need is running.",
-        )
-        .run(move |i: ExecInput, cx: ToolCx| {
-            let exec = exec.clone();
-            async move { exec.start(i, &cx).await }
-        })
+        .guideline(guideline);
+        if self.0.escalation {
+            tool.run(move |i: EscalatedInput, cx: ToolCx| {
+                let exec = exec.clone();
+                async move {
+                    let escalated =
+                        i.sandbox_permissions == Some(SandboxPermissions::RequireEscalated);
+                    if escalated
+                        && i.justification
+                            .as_deref()
+                            .is_none_or(|j| j.trim().is_empty())
+                    {
+                        return Err(ToolError::msg(
+                            "give a justification with require_escalated: one sentence the \
+                             user reads when asked to approve the command",
+                        ));
+                    }
+                    exec.start(i.base, escalated, &cx).await
+                }
+            })
+        } else {
+            tool.run(move |i: ExecInput, cx: ToolCx| {
+                let exec = exec.clone();
+                async move { exec.start(i, false, &cx).await }
+            })
+        }
     }
 
     fn stdin_tool(&self) -> Tool {
@@ -654,6 +713,55 @@ struct ExecInput {
     /// The most output to return, in tokens (default 10000); longer output keeps its
     /// beginning and end.
     max_output_tokens: Option<usize>,
+}
+
+/// Whether `call` asks to run a command outside the env's sandbox (`exec_command` with
+/// `sandbox_permissions: "require_escalated"`, offered with [`Exec::escalation`]): the calls an
+/// approval hook asks the user about.
+pub fn is_escalation(call: &ToolCall) -> bool {
+    call.name == EXEC_TOOL && call.input["sandbox_permissions"] == "require_escalated"
+}
+
+/// What a sandbox's refusals print.
+const DENIALS: &[&str] = &[
+    "Operation not permitted",
+    "Read-only file system",
+    "Permission denied",
+    "Could not resolve host",
+    "nodename nor servname provided",
+    "Network is unreachable",
+    "Temporary failure in name resolution",
+];
+
+const SANDBOX_HINT: &str = "\n[The sandbox may have blocked this command: it writes only in \
+the workspace and has no network beyond localhost. If it needs more, run it again with \
+sandbox_permissions \"require_escalated\" and a justification.]\n";
+
+fn looks_sandboxed(report: &str) -> bool {
+    let output = report.split_once("Output:\n").map_or(report, |(_, o)| o);
+    DENIALS.iter().any(|d| output.contains(d))
+}
+
+/// Where a command may run.
+#[derive(Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SandboxPermissions {
+    /// In the sandbox, as usual.
+    UseDefault,
+    /// Outside the sandbox, once the user approves.
+    RequireEscalated,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct EscalatedInput {
+    #[serde(flatten)]
+    base: ExecInput,
+    /// "use_default" (the default) runs the command in the sandbox; "require_escalated" asks
+    /// the user to let it run outside, for writing outside the workspace or using the network.
+    sandbox_permissions: Option<SandboxPermissions>,
+    /// With require_escalated: one sentence telling the user why the command needs to run
+    /// outside the sandbox.
+    justification: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]

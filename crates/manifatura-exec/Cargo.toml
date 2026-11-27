@@ -21,6 +21,7 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [dev-dependencies]
 manifatura-agent = { workspace = true, features = ["testing"] }
+manifatura-sandbox.workspace = true
 manifatura-tools = { workspace = true, features = ["pty"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 

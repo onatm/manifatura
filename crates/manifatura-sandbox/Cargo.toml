@@ -1,0 +1,24 @@
+[package]
+name = "manifatura-sandbox"
+description = "A sandboxed env for manifatura: commands run under macOS Seatbelt, writing only to the workspace, without the network."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-sandbox"
+
+[dependencies]
+async-trait.workspace = true
+manifatura-agent.workspace = true
+
+[dev-dependencies]
+manifatura-tools = { workspace = true, features = ["pty"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -17,6 +17,7 @@
 //! | `subagents` | [`subagents`]: a `task` tool that hands a self-contained task to a subagent |
 //! | `mcp` | [`mcp`]: MCP servers' tools, over stdio or HTTP |
 //! | `exec` | [`exec`]: `exec_command` and `write_stdin`, commands that keep running in the background (with `tools`, terminals for `tools::Local`) |
+//! | `sandbox` | [`sandbox`]: an env whose commands run under macOS Seatbelt, writing only to the workspace, without the network |
 //! | `auth` | [`auth`]: signing in to a model vendor, such as OpenAI's Sign in with ChatGPT for the user's plan |
 //! | `testing` | `testing`: a scripted provider for tests |
 //!
@@ -53,6 +54,9 @@ pub use manifatura_auth as auth;
 
 #[cfg(feature = "exec")]
 pub use manifatura_exec as exec;
+
+#[cfg(feature = "sandbox")]
+pub use manifatura_sandbox as sandbox;
 
 pub use schemars;
 pub use serde_json;

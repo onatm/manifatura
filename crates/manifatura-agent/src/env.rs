@@ -29,6 +29,10 @@ pub struct ExecSpec {
     /// written, and what is typed goes in through [`Process::take_input`]. An env that has no
     /// terminals refuses the spec.
     pub tty: Option<TtySize>,
+    /// Runs the command outside the env's sandbox, if it has one. An env with a sandbox does
+    /// this only when it was set up to allow it, and an app should ask the user first; an env
+    /// without one ignores the flag.
+    pub unsandboxed: bool,
 }
 
 /// The size of a terminal, in character cells.

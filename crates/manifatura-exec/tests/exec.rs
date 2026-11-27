@@ -211,3 +211,79 @@ async fn the_model_hears_of_a_background_exit_before_its_next_call() {
         "not before it exits"
     );
 }
+
+#[test]
+fn escalation_adds_its_fields_only_when_on() {
+    let props = |exec: &Exec| exec.tools()[0].spec().input_schema["properties"].clone();
+    assert!(props(&Exec::new()).get("sandbox_permissions").is_none());
+    let p = props(&Exec::new().escalation(true));
+    assert!(p.get("sandbox_permissions").is_some() && p.get("justification").is_some());
+    assert!(p.get("cmd").is_some(), "the usual fields stay");
+
+    let call = |input: Value| manifatura_agent::ToolCall {
+        id: "c".into(),
+        name: "exec_command".into(),
+        input,
+    };
+    assert!(manifatura_exec::is_escalation(&call(
+        json!({"cmd": "npm i", "sandbox_permissions": "require_escalated"})
+    )));
+    assert!(!manifatura_exec::is_escalation(&call(json!({"cmd": "ls"}))));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_escalated_command_runs_outside_the_sandbox() {
+    let base = std::env::temp_dir().join(format!("mf-exec-esc-{}", std::process::id()));
+    let (dir, outside) = (base.join("ws"), base.join("outside"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let outside = std::fs::canonicalize(outside).unwrap();
+    let sandbox = manifatura_sandbox::Sandbox::new(Local::new(&dir).unwrap())
+        .unwrap()
+        .allow_unsandboxed(true);
+    let exec = Exec::new().escalation(true);
+    let ws = Ws {
+        env: Arc::new(sandbox),
+        tools: exec.tools(),
+        exec,
+        session: SessionId::from("detached"),
+    };
+    let cmd = format!("echo yes > {}/x.txt", outside.display());
+
+    let r = ws.exec(json!({"cmd": cmd})).await;
+    assert!(r.contains("Process exited with code 1"), "{r}");
+    assert!(r.contains("require_escalated"), "a hint: {r}");
+    let r = ws
+        .call(
+            "exec_command",
+            json!({"cmd": cmd, "sandbox_permissions": "require_escalated"}),
+        )
+        .await;
+    assert!(
+        r.is_error && r.output.contains("justification"),
+        "{}",
+        r.output
+    );
+    let r = ws
+        .exec(json!({
+            "cmd": format!("{cmd}; sleep 1"),
+            "sandbox_permissions": "require_escalated",
+            "justification": "Writes the test file outside the workspace.",
+            "yield_time_ms": 250
+        }))
+        .await;
+    assert!(r.contains("session ID 2"), "the failed attempt was 1: {r}");
+    assert!(ws.exec.processes(&ws.session)[0].escalated);
+    let r = ws.stdin(json!({"session_id": 2})).await;
+    assert!(
+        r.output.contains("Process exited with code 0"),
+        "{}",
+        r.output
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.join("x.txt")).unwrap(),
+        "yes\n"
+    );
+    let _ = std::fs::remove_dir_all(base);
+}

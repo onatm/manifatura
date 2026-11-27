@@ -139,7 +139,24 @@ let rt = Runtime::builder().provider(providers::from_env()?).env(env).build();
 
 A sandbox, a container or a remote machine is another `Env` implementation; the tools do not change. Paths the model gives resolve against the env's working directory, and `Local` does not stop them leaving it: isolation belongs to the env.
 
-What an env implements for commands:
+### A sandbox
+
+The `sandbox` feature (the `manifatura-sandbox` crate) wraps an env so that its commands run under macOS Seatbelt:
+
+```rust
+use manifatura::sandbox::Sandbox;
+
+let env = Sandbox::new(tools::Local::new(".")?)?
+    .protect(".myapp")          // read-only at the top of the workspace, beside .git and .agents
+    .allow_unsandboxed(true);   // commands may ask to run outside it (see below)
+let rt = Runtime::builder().provider(providers::from_env()?).env(env).build();
+```
+
+Sandboxed commands read anything but write only to the workspace, the env's scratch directory and `/private/tmp`, never to `.git` or `.agents` at the top of the workspace; they have no network beyond binding ports and talking to `localhost`. The env's own writes (the file tools') follow the same rules. `writable(path)` and `network(true)` widen it. It runs on macOS only for now; elsewhere `Sandbox::new` fails with `Unsupported`.
+
+A command whose `ExecSpec::unsandboxed` is set runs on the wrapped env, outside the sandbox, but only with `allow_unsandboxed(true)`; otherwise it is refused. `Exec::escalation` lets the model ask for that (below); ask the user before such a command runs.
+
+### What an env implements for commands
 
 - `exec(spec)` starts one, with its output going to the files `spec` names (`stdout` and `stderr` may be the same file, for both streams in order). `ExecSpec::tty` asks for a terminal of a given size; an env without terminals refuses it. `Local` has them with `manifatura-tools`' `pty` feature.
 - The returned `Process` waits, kills the command and everything it started, interrupts it (`SIGINT`; by default, a kill), and hands out its terminal's input once (`take_input`).
@@ -167,6 +184,18 @@ let agent = Agent::new("You are a coding agent.")
 Each result says how long the call took, whether the command exited (with its code) or still runs (with its session ID), and the output, stdout and stderr together. Output past `max_output_tokens` (10,000 by default) keeps its beginning and end. Commands get `NO_COLOR=1`, `PAGER=cat` and `GIT_PAGER=cat` (and `TERM=dumb` outside a terminal), so nothing waits for a pager.
 
 Sessions belong to the manifatura session that started them. A command whose exit the model has read is forgotten; one that exits while the model is busy elsewhere is reported in a note before its next model call, by the `Step` hook from `Exec::hooks`. Each session keeps 64 commands at most (`Exec::max_processes`); starting another drops the least recently used, finished ones first, and kills it if it still runs. An abort during `exec_command` kills that command; dropping the last handle to the `Exec` kills them all.
+
+In a sandbox, `Exec::escalation(true)` lets the model ask to run a command outside it, as OpenAI's models are trained to: `exec_command` gets `sandbox_permissions` (`"use_default"` or `"require_escalated"`) and a `justification`, which an escalated call must give. Such a call runs with `ExecSpec::unsandboxed`, so put an approval hook in front of it; `manifatura::exec::is_escalation` picks those calls out:
+
+```rust
+let exec = Exec::new().escalation(true);
+let agent = Agent::new("…")
+    .tools(exec.tools())
+    .hooks(exec.hooks())
+    .hooks(kit::approve_when(manifatura::exec::is_escalation, ask_the_user));
+```
+
+A sandboxed command that fails the way a sandbox makes commands fail ("Operation not permitted", no route to a host) ends with a hint saying how to ask.
 
 For an app, `Exec::subscribe` streams every start and exit, `Exec::processes(session)` lists what a session keeps, and `Exec::kill(session, id)` stops one.
 
