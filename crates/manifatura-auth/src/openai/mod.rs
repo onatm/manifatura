@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use manifatura_agent::{ErrorKind, ProviderError};
+use manifatura_agent::{Effort, ErrorKind, ProviderError};
 use manifatura_providers::responses::{BearerFuture, Credentials, Responses};
 use serde::Serialize;
 use serde_json::Value;
@@ -104,13 +104,20 @@ pub struct Account {
     pub plan_usage: bool,
 }
 
-/// A model the account can use.
+/// A model the account can use, with what the plan's catalog says of it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct Model {
     /// The id to request, e.g. as `Agent::model`.
     pub slug: String,
     /// A name to show people.
     pub display_name: String,
+    /// Its context window in tokens, when the catalog gives one.
+    pub context_window: Option<u32>,
+    /// The reasoning effort it uses when none is asked for.
+    pub default_effort: Option<Effort>,
+    /// The efforts it accepts, from the least, each with the catalog's description.
+    pub efforts: Vec<(Effort, String)>,
 }
 
 /// Sign in with ChatGPT for one app. Cheap to clone.
@@ -294,9 +301,28 @@ impl SignIn {
             if m["visibility"] == "list"
                 && let Some(slug) = m["slug"].as_str()
             {
+                let efforts = m["supported_reasoning_levels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|l| {
+                        let effort = Effort::parse(l["effort"].as_str()?)?;
+                        Some((
+                            effort,
+                            l["description"].as_str().unwrap_or_default().to_string(),
+                        ))
+                    })
+                    .collect();
                 out.push(Model {
                     slug: slug.into(),
                     display_name: m["display_name"].as_str().unwrap_or(slug).into(),
+                    context_window: m["context_window"]
+                        .as_u64()
+                        .and_then(|n| u32::try_from(n).ok()),
+                    default_effort: m["default_reasoning_level"]
+                        .as_str()
+                        .and_then(Effort::parse),
+                    efforts,
                 });
             }
         }
@@ -306,6 +332,9 @@ impl SignIn {
                     out.push(Model {
                         slug: id.into(),
                         display_name: id.into(),
+                        context_window: None,
+                        default_effort: None,
+                        efforts: Vec::new(),
                     });
                 }
             }

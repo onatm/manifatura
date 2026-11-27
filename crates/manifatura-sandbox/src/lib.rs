@@ -191,8 +191,10 @@ impl<E: Env> Sandbox<E> {
     }
 }
 
-/// `path` with symlinks resolved as far as it exists, and the rest appended. `None` when the
-/// part that does not exist contains `..`.
+/// Canonicalizes the longest prefix of `path` it can resolve, then appends the remaining
+/// components. This lets the sandbox check writes to paths that do not yet exist.
+///
+/// Returns `None` if no prefix can be canonicalized or the unresolved suffix contains `..`.
 fn real_path(path: &Path) -> Option<PathBuf> {
     let mut existing = path.to_path_buf();
     let mut rest = Vec::new();

@@ -118,7 +118,10 @@ async fn start_issuer() -> Arc<Mutex<Issuer>> {
                             }
                         }
                         "/v1/models" => json!({"models":[
-                            {"slug":"m-1","display_name":"Model One","visibility":"list"},
+                            {"slug":"m-1","display_name":"Model One","visibility":"list","context_window":500000,
+                             "default_reasoning_level":"low","supported_reasoning_levels":[
+                                {"effort":"low","description":"Fast"},{"effort":"xhigh","description":"Deep"},
+                                {"effort":"someday","description":"Unknown to manifatura"}]},
                             {"slug":"hidden","display_name":"H","visibility":"hide"}
                         ]}),
                         _ => Value::Null,
@@ -235,6 +238,24 @@ async fn signs_in_refreshes_and_lists_models() {
     let models = chatgpt.models().await.unwrap();
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].slug, "m-1");
+    assert_eq!(models[0].context_window, Some(500_000));
+    assert_eq!(
+        models[0].default_effort,
+        Some(manifatura_agent::Effort::Low)
+    );
+    let efforts: Vec<_> = models[0]
+        .efforts
+        .iter()
+        .map(|(e, d)| (*e, d.as_str()))
+        .collect();
+    assert_eq!(
+        efforts,
+        [
+            (manifatura_agent::Effort::Low, "Fast"),
+            (manifatura_agent::Effort::XHigh, "Deep")
+        ],
+        "levels manifatura does not know are left out"
+    );
 
     // A second sign-in reuses the registration and hints the account.
     let again = chatgpt.login().await.unwrap();

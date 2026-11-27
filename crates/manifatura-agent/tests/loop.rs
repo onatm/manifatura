@@ -1181,3 +1181,14 @@ async fn a_text_tool_gets_the_text_however_it_arrives() {
         Tool::new("t", "d").run_json(json!({"type": "object"}), |_, _| async { Ok("") });
     assert!(json_tool.spec().format.is_json());
 }
+
+#[test]
+fn efforts_read_their_api_names() {
+    for e in Effort::ALL {
+        assert_eq!(Effort::parse(e.as_str()), Some(e));
+    }
+    assert_eq!(Effort::parse("Off"), Some(Effort::Off));
+    assert_eq!(Effort::parse("XHIGH"), Some(Effort::XHigh));
+    assert_eq!(serde_json::to_value(Effort::XHigh).unwrap(), json!("xhigh"));
+    assert_eq!(Effort::parse("extreme"), None);
+}

@@ -325,17 +325,48 @@ pub enum Effort {
     Medium,
     /// Much.
     High,
+    /// More than high, where the model has it.
+    #[serde(rename = "xhigh")]
+    XHigh,
+    /// As much as the model's usual reasoning allows, where it has it.
+    Max,
+    /// Beyond max, where the model has it.
+    Ultra,
 }
 
 impl Effort {
-    /// The name OpenAI-style APIs use: `none`, `low`, `medium` or `high`.
+    /// Every level, from none to the most.
+    pub const ALL: [Effort; 7] = [
+        Effort::Off,
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::XHigh,
+        Effort::Max,
+        Effort::Ultra,
+    ];
+
+    /// The name OpenAI-style APIs use: `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`.
+    /// Not every model has every level; a provider's model list says which it has.
     pub fn as_str(self) -> &'static str {
         match self {
             Effort::Off => "none",
             Effort::Low => "low",
             Effort::Medium => "medium",
             Effort::High => "high",
+            Effort::XHigh => "xhigh",
+            Effort::Max => "max",
+            Effort::Ultra => "ultra",
         }
+    }
+
+    /// The level named `name`, as [`as_str`](Self::as_str) writes it (`off` for none too), in any case.
+    pub fn parse(name: &str) -> Option<Effort> {
+        let name = name.trim().to_ascii_lowercase();
+        if name == "off" {
+            return Some(Effort::Off);
+        }
+        Effort::ALL.into_iter().find(|e| e.as_str() == name)
     }
 }
 
