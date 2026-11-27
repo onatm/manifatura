@@ -1,0 +1,29 @@
+[package]
+name = "manifatura-subagents"
+description = "Subagents for manifatura: a task tool that hands a self-contained task to another agent in a child session and returns its report."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-subagents"
+
+[dependencies]
+async-trait.workspace = true
+manifatura-agent.workspace = true
+manifatura-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+
+[dev-dependencies]
+manifatura-agent = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

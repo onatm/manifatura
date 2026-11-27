@@ -20,6 +20,7 @@ store-jsonl = ["dep:manifatura-store"]
 tools = ["dep:manifatura-tools"]
 mcp = ["dep:manifatura-mcp"]
 skills = ["dep:manifatura-skills"]
+subagents = ["dep:manifatura-subagents"]
 testing = ["manifatura-agent/testing"]
 
 [dependencies]
@@ -29,6 +30,7 @@ manifatura-mcp = { workspace = true, optional = true }
 manifatura-models = { workspace = true, optional = true }
 manifatura-skills = { workspace = true, optional = true }
 manifatura-store = { workspace = true, optional = true }
+manifatura-subagents = { workspace = true, optional = true }
 manifatura-tools = { workspace = true, optional = true }
 schemars.workspace = true
 serde_json.workspace = true

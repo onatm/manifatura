@@ -8,6 +8,7 @@ members = [
     "crates/manifatura-models",
     "crates/manifatura-skills",
     "crates/manifatura-store",
+    "crates/manifatura-subagents",
     "crates/manifatura-tools",
     "examples",
 ]
@@ -30,6 +31,7 @@ manifatura-mcp = { version = "0.2.1", path = "crates/manifatura-mcp" }
 manifatura-models = { version = "0.2.1", path = "crates/manifatura-models", default-features = false }
 manifatura-skills = { version = "0.2.1", path = "crates/manifatura-skills" }
 manifatura-store = { version = "0.2.1", path = "crates/manifatura-store" }
+manifatura-subagents = { version = "0.2.1", path = "crates/manifatura-subagents" }
 manifatura-tools = { version = "0.2.1", path = "crates/manifatura-tools" }
 async-trait = "0.1.92"
 futures-util = { version = "0.3.34", default-features = false, features = ["std", "alloc"] }

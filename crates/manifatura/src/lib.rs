@@ -13,6 +13,7 @@
 //! | `store-jsonl` (default) | [`store`] |
 //! | `tools` (default) | [`tools`]: `read`, `edit`, `grep`, `glob`, `bash` and [`tools::Local`], the env on this machine |
 //! | `skills` (default) | [`skills`]: [Agent Skills](https://agentskills.io), a catalog for the prompt and a `skill` tool |
+//! | `subagents` | [`subagents`]: a `task` tool that hands a self-contained task to a subagent |
 //! | `mcp` | [`mcp`]: MCP servers' tools, over stdio or HTTP |
 //! | `testing` | `testing`: a scripted provider for tests |
 //!
@@ -40,6 +41,9 @@ pub use manifatura_mcp as mcp;
 
 #[cfg(feature = "skills")]
 pub use manifatura_skills as skills;
+
+#[cfg(feature = "subagents")]
+pub use manifatura_subagents as subagents;
 
 pub use schemars;
 pub use serde_json;

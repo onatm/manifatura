@@ -49,7 +49,8 @@ async fn ask(call: ToolCall) -> kit::Answer {
 - **Deferred tools.** Tools marked deferred stay out of the prompt, and `kit::catalog` lets the model search for them and run them. Useful with MCP servers that bring dozens of tools.
 - **`AGENTS.md` context.** `kit::context` finds `AGENTS.md` (or `CLAUDE.md`) files from the repository root down, and builds a system prompt from them and the tools' own guidelines.
 - **Skills.** `skills` loads [Agent Skills](https://agentskills.io) from `.agents/skills`, your own directories or the binary itself. The prompt lists them, the model loads one with the `skill` tool when a task calls for it, and your UI can start one with `/name`.
-- **Small.** About 10,000 lines across eight crates, a core that depends on `serde`, `tokio` and little else, and a facade that puts each block behind a feature.
+- **Subagents.** `subagents` gives the model a `task` tool that hands a self-contained task to another agent, or to a copy of itself, in a child session, and returns only its report. Approvals are shared with the caller, and subagents nest as deep as you allow.
+- **Small.** About 10,000 lines across nine crates, a core that depends on `serde`, `tokio` and little else, and a facade that puts each block behind a feature.
 
 ## Install
 
@@ -67,6 +68,7 @@ manifatura needs Rust 1.91 or newer. `Local` and the `bash` tool run on Unix: Li
 | `skills` | yes | `manifatura::skills`: Agent Skills, a catalog for the prompt and the `skill` tool |
 | `store-jsonl` | yes | `manifatura::store`: sessions as JSON lines |
 | `tools` | yes | `manifatura::tools`: `read`, `edit`, `grep`, `glob`, `bash` and `Local` |
+| `subagents` | no | `manifatura::subagents`: the `task` tool and child sessions |
 | `mcp` | no | `manifatura::mcp`: MCP servers' tools, over stdio or HTTP |
 | `testing` | no | `manifatura::testing`: a scripted provider for tests |
 
@@ -119,6 +121,7 @@ Hooks registered on the runtime run before the agent's own, each in the order ad
 | [`manifatura-agent`](https://docs.rs/manifatura-agent) | The loop, typed hooks, sessions, and the `Provider`, `Env` and `Store` traits |
 | [`manifatura-kit`](https://docs.rs/manifatura-kit) | Hook bundles and `AGENTS.md` context |
 | [`manifatura-skills`](https://docs.rs/manifatura-skills) | Agent Skills: discovery, the prompt catalog and the `skill` tool |
+| [`manifatura-subagents`](https://docs.rs/manifatura-subagents) | Subagents: the `task` tool and child sessions |
 | [`manifatura-models`](https://docs.rs/manifatura-models) | llama.cpp and other OpenAI-compatible providers, streamed over SSE |
 | [`manifatura-store`](https://docs.rs/manifatura-store) | Sessions as JSON lines |
 | [`manifatura-tools`](https://docs.rs/manifatura-tools) | `read`, `edit`, `grep`, `glob`, `bash`, script tools and `Local` |
@@ -135,6 +138,7 @@ The guides are on [manifatura.dev](https://manifatura.dev), and in [`docs/`](doc
 - [Models](docs/models.md): providers, and writing your own
 - [System prompts](docs/system-prompts.md): `AGENTS.md` files, tool guidelines, keeping the prompt cache warm
 - [Skills](docs/skills.md): Agent Skills from `.agents/skills` and your own, loaded when a task calls for them (`skills` feature)
+- [Subagents](docs/subagents.md): handing a task to another agent in a child session (`subagents` feature)
 - [API reference](https://docs.rs/manifatura) on docs.rs
 
 ## Used by

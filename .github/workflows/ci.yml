@@ -42,6 +42,7 @@ jobs:
         run: |
           cargo check -p manifatura --no-default-features
           cargo check -p manifatura --no-default-features --features mcp
+          cargo check -p manifatura --no-default-features --features subagents
           cargo check -p manifatura-tools --no-default-features
           cargo check -p manifatura-agent
 
