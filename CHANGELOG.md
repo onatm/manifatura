@@ -23,6 +23,7 @@ All notable changes are recorded here. The project follows [Semantic Versioning]
 - `manifatura-agent`: `Session::path`, the entries of the current branch, and `Session::history_so_far`, the current branch's messages as recorded, read without waiting for a turn in progress.
 - `manifatura-snapshots`, new, as `manifatura::snapshots` behind the `snapshots` feature (off by default): a `TurnStart` hook that snapshots the working directory as each turn starts, as a git tree in a repository of its own, and records it in the session; `before` finds a message's snapshot, `Snapshots::changes` lists what differs and `Snapshots::restore` puts the files back. Git runs through the env.
 - `manifatura-auth`, new, as `manifatura::auth` behind the `auth` feature (off by default): signing in to model vendors. `openai::SignIn` is OpenAI's Sign in with ChatGPT: dynamic client registration, a loopback callback on `127.0.0.1`, tokens in an owner-only file refreshed across processes under a lock, the plan's models, and a `Responses` provider on the user's plan. Each `Model` carries the plan's catalog: its `context_window`, `default_effort` and the `efforts` it accepts, with their descriptions. `examples/sign-in.rs` shows it.
+- `manifatura-kit`: `compaction::drop_old_results` and `DropResults`, a `Context` hook that leaves the results of older turns out of what is sent and drops a long turn's oldest results in batches, so the prompt cache keeps working.
 
 ## 0.3.0
 

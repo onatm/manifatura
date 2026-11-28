@@ -87,7 +87,7 @@ fn audit() -> Hooks {
 | `kit::Approvals::gate(check, scope)` | The same, asking through pending requests any client can answer (see [approvals](approvals.md)). |
 | `kit::catalog()` | Deferred tools behind `find_tools` and `run_tool` (see [tools](tools.md)). |
 | `kit::repair()` | Fixes inputs small models get wrong: `"30"` for a number, objects sent as JSON strings, a bare value for a one-field tool. |
-| `kit::compaction::on_overflow(c)`, `auto(t, c)`, `trim_results(n, chars)` | Compaction on overflow, past a threshold, and shorter old tool results (see [sessions](sessions.md)). |
+| `kit::compaction::on_overflow(c)`, `auto(t, c)`, `drop_old_results()`, `trim_results(n, chars)` | Compaction on overflow, past a threshold, older turns' tool results left out, and shorter old tool results (see [sessions](sessions.md)). |
 | `kit::system_delta()` | Keeps the first system prompt and sends later changes as notes (see [system prompts](system-prompts.md)). |
 
 Order matters where bundles look at the same calls. Add `catalog` before bundles that look at tool names, so they see the real tool rather than `run_tool`, and `system_delta` last.

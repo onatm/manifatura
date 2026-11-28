@@ -76,6 +76,119 @@ async fn summarizer_sends_a_transcript_with_the_focus() {
     assert!(s.history().await.unwrap()[0].text().ends_with("focused"));
 }
 
+/// A tool returning `size` characters, failing when the input says so.
+fn sized(name: &str, size: usize, keep: bool) -> Tool {
+    let t = Tool::new(name, "Returns some text.");
+    let t = if keep { t.keep_results() } else { t };
+    t.run_json(
+        json!({"type":"object", "properties": {"fail": {"type": "boolean"}}}),
+        move |i, _| async move {
+            if i["fail"] == true {
+                return Err(ToolError::msg("z".repeat(size)));
+            }
+            Ok("z".repeat(size))
+        },
+    )
+}
+
+fn dropped(r: &ModelRequest) -> Vec<bool> {
+    results(r)
+        .iter()
+        .map(|(_, out)| out.starts_with("[output of "))
+        .collect()
+}
+
+#[tokio::test]
+async fn drop_old_results_keeps_the_current_turn_and_the_one_before() {
+    let p = ScriptedProvider::new()
+        .call("big", json!({}))
+        .text("one")
+        .call("big", json!({}))
+        .text("two")
+        .call("big", json!({}))
+        .text("three");
+    let rt = runtime(&p);
+    let agent = Agent::new("x")
+        .tool(sized("big", 3_000, false))
+        .hooks(compaction::drop_old_results());
+    let s = rt.session(&agent, SessionId::new());
+    for prompt in ["a", "b", "c"] {
+        s.prompt(prompt).await.unwrap().wait().await.unwrap();
+    }
+    let requests = p.requests();
+    // The second turn still sends the first turn's result whole.
+    assert_eq!(dropped(&requests[3]), [false, false]);
+    // The third drops the first turn's.
+    let last = requests.last().unwrap();
+    assert_eq!(dropped(last), [true, false, false]);
+    assert!(
+        results(last)[0]
+            .1
+            .contains("big dropped from the context: 3000 characters")
+    );
+    let kept = s.history().await.unwrap();
+    assert!(kept.iter().all(|m| !m.text().contains("dropped")));
+}
+
+#[tokio::test]
+async fn drop_old_results_keeps_short_results_errors_and_tools_that_keep_theirs() {
+    let p = ScriptedProvider::new()
+        .calls(&[
+            ("short", json!({})),
+            ("big", json!({"fail": true})),
+            ("plan", json!({})),
+            ("big", json!({})),
+        ])
+        .text("one")
+        .text("two")
+        .text("three");
+    let rt = runtime(&p);
+    let agent = Agent::new("x")
+        .tool(sized("short", 900, false))
+        .tool(sized("big", 3_000, false))
+        .tool(sized("plan", 3_000, true))
+        .hooks(compaction::DropResults::default().keep_turns(0).hooks());
+    let s = rt.session(&agent, SessionId::new());
+    s.prompt("a").await.unwrap().wait().await.unwrap();
+    s.prompt("b").await.unwrap().wait().await.unwrap();
+    assert_eq!(
+        dropped(p.requests().last().unwrap()),
+        [false, false, false, true]
+    );
+}
+
+#[tokio::test]
+async fn a_long_turn_drops_its_own_results_in_batches() {
+    let mut p = ScriptedProvider::new();
+    for _ in 0..12 {
+        p = p.call("big", json!({}));
+    }
+    let p = p.text("done");
+    let rt = runtime(&p);
+    // About 750 tokens a result in a 6,000-token window: past 70% after five of them, and each
+    // batch goes down to 30%.
+    let agent = Agent::new("x")
+        .context_window(6_000)
+        .tool(sized("big", 3_000, false))
+        .hooks(compaction::DropResults::default().window(0.7, 0.3).hooks());
+    let s = rt.session(&agent, SessionId::new());
+    s.prompt("go").await.unwrap().wait().await.unwrap();
+    let counts: Vec<usize> = p
+        .requests()
+        .iter()
+        .map(|r| dropped(r).iter().filter(|d| **d).count())
+        .collect();
+    // Nothing until the ceiling, then a batch that holds for several steps, not one per step.
+    assert_eq!(counts[..5], [0; 5], "{counts:?}");
+    let changes = counts.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!(changes <= 3, "{counts:?}");
+    assert!(counts.windows(2).all(|w| w[0] <= w[1]), "{counts:?}");
+    // The newest result always goes whole.
+    for r in p.requests() {
+        assert!(!dropped(&r).last().copied().unwrap_or(false));
+    }
+}
+
 #[tokio::test]
 async fn trim_results_shrinks_old_results_in_the_request_only() {
     let big = Tool::new("big", "Returns a lot.").run_json(json!({"type":"object"}), |_, _| async {

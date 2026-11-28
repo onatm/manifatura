@@ -113,12 +113,15 @@ println!("{} → {} tokens", report.tokens_before, report.tokens_after);
 
 The cut never separates a tool result from its call, and the previous summary is handed to the next one. The session keeps every message; the summary only changes what the model sees.
 
-Three hooks in `kit::compaction` decide when, if you would rather not:
+Hooks in `kit::compaction` decide when, if you would rather not, or keep the requests small without summarising:
 
 | Hook | What it does |
 | --- | --- |
 | `on_overflow(compactor)` | When the provider reports a context overflow, compacts once and retries the call. |
 | `auto(threshold, compactor)` | Compacts before the next call once the context passes `threshold` of the window (e.g. `0.8`). |
+| `drop_old_results()` | Leaves the results of turns before the previous one out of what is sent, as a one-line stub, without touching the session. Short results, errors and tools that keep their results go whole. A turn past 70% of the window drops its own oldest results down to 50%, in one batch, so the start of each request stays the same and the prompt cache keeps working. `DropResults` sets the turns kept, the size kept and the shares. |
 | `trim_results(keep_recent, max_chars)` | Shortens old, long tool results in what is sent, without touching the session. |
+
+Used together, `drop_old_results` goes first and a summary is the fallback: keep its ceiling under `auto`'s threshold, so results are dropped before a summary is asked for, and `auto` measures the requests as sent, after the drops.
 
 `Summarizer::small()` keeps 6k recent tokens, for small context windows. A `BeforeCompact` hook can change the plan, supply its own summary or cancel.
