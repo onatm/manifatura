@@ -1222,6 +1222,14 @@ async fn the_path_follows_the_current_branch() {
         .clone();
     s.branch(Some(one)).await.unwrap();
     assert_eq!(texts(&s.path().await.unwrap()), ["a", "one"]);
+    let so_far: Vec<String> = s
+        .history_so_far()
+        .await
+        .unwrap()
+        .iter()
+        .map(Message::text)
+        .collect();
+    assert_eq!(so_far, ["a", "one"]);
     s.prompt("c").await.unwrap().wait().await.unwrap();
     assert_eq!(texts(&s.path().await.unwrap()), ["a", "one", "c", "three"]);
     assert_eq!(
@@ -1229,4 +1237,43 @@ async fn the_path_follows_the_current_branch() {
         6,
         "the other branch stays in the session"
     );
+}
+
+#[tokio::test]
+async fn what_is_recorded_so_far_is_read_while_a_turn_runs() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let g = gate.clone();
+    let wait = Tool::new("wait", "waits").run_json(json!({"type":"object"}), move |_, _| {
+        let g = g.clone();
+        async move {
+            g.notified().await;
+            Ok("waited")
+        }
+    });
+    let p = ScriptedProvider::new().call("wait", json!({})).text("done");
+    let store = mem();
+    let rt = runtime(&p, store.clone());
+    let s = rt.session(&Agent::new("x").tool(wait), SessionId::new());
+    let mut turn = s.prompt("go").await.unwrap();
+    while let Some(e) = turn.next_event().await {
+        if matches!(e, Event::ActionStarted { .. }) {
+            // `history` would wait for the turn; this reads what the store has now.
+            let so_far = s.history_so_far().await.unwrap();
+            assert_eq!(so_far[0].text(), "go");
+            assert_eq!(so_far.len(), 2, "the prompt and the call");
+            gate.notify_one();
+        }
+    }
+    turn.wait().await.unwrap();
+    // A handle on another runtime, never used, reads the session from its last entry.
+    let other = runtime(&ScriptedProvider::new(), store);
+    let texts: Vec<String> = other
+        .session(&Agent::new("x"), s.id().clone())
+        .history_so_far()
+        .await
+        .unwrap()
+        .iter()
+        .map(Message::text)
+        .collect();
+    assert_eq!(texts.last().unwrap(), "done");
 }

@@ -246,6 +246,7 @@ fn open(rt: &Arc<RtInner>, agent: &Agent, id: SessionId) -> Session {
     let hooks = rt.hooks.clone().and(agent.hooks.clone());
     let shared = Arc::new(Shared {
         status: Mutex::default(),
+        leaf: Mutex::default(),
         id: id.clone(),
         rt: rt.clone(),
         agent: agent.clone(),
@@ -301,6 +302,9 @@ pub struct SessionStatus {
 
 pub(crate) struct Shared {
     status: Mutex<SessionStatus>,
+    /// The entry the next message follows, as last published; `None` until the session is first
+    /// projected.
+    leaf: Mutex<Option<Option<String>>>,
     pub(crate) id: SessionId,
     pub(crate) rt: Arc<RtInner>,
     pub(crate) agent: Agent,
@@ -375,6 +379,7 @@ impl Shared {
     }
 
     pub(crate) fn publish_status(&self, live: &Live) {
+        *self.leaf.lock().unwrap() = Some(live.leaf.clone());
         let model = self.model(live);
         let mut s = self.status.lock().unwrap();
         s.context_window = model.as_deref().and_then(|m| self.window(m));
@@ -645,6 +650,26 @@ impl Session {
     /// Every event of every turn in this session.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
+    }
+
+    /// The current branch's messages as recorded so far, without waiting for queued work or a
+    /// turn in progress: for showing a session while it runs (its latest message may still be
+    /// streaming, and [`subscribe`](Self::subscribe) follows it from here).
+    pub async fn history_so_far(&self) -> Result<Vec<Message>, Error> {
+        let entries = self.entries().await?;
+        let leaf = self.shared.leaf.lock().unwrap().clone();
+        let live = match leaf {
+            Some(leaf) => Live::project_at(&entries, leaf.as_deref()),
+            None => Live::project(&entries),
+        };
+        // A call still running has no result recorded: the projection's stand-in for one is left out.
+        Ok(live
+            .messages
+            .into_iter()
+            .zip(live.ids)
+            .filter(|(_, id)| !id.is_empty())
+            .map(|(message, _)| message)
+            .collect())
     }
 
     /// The current context, as the model would see it (after any queued work).
