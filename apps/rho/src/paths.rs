@@ -173,6 +173,21 @@ pub(crate) fn save_skills(path: &Path, visibility: &BTreeMap<String, Visibility>
     write(path, &doc.to_string())
 }
 
+/// Sets `model` and `effort` in `path`, the config new sessions start from, keeping the rest of the file as it is.
+/// No effort leaves the model's own default.
+pub(crate) fn save_choice(path: &Path, model: &str, effort: Option<&str>) -> Result<()> {
+    let mut doc: DocumentMut = read(path)?
+        .unwrap_or_default()
+        .parse()
+        .with_context(|| format!("reading {}", path.display()))?;
+    doc.insert("model", toml_edit::value(model));
+    match effort {
+        Some(effort) => doc.insert("effort", toml_edit::value(effort)),
+        None => doc.remove("effort"),
+    };
+    write(path, &doc.to_string())
+}
+
 /// Adds `rule` to the allow list under `[rules]` in `path`, keeping the rest of the file as it is.
 pub(crate) fn remember(path: &Path, rule: &Rule) -> Result<()> {
     let mut doc: DocumentMut = read(path)?
@@ -382,6 +397,29 @@ mcp = ["exa"]
         );
         save_skills(&path, &BTreeMap::new()).unwrap();
         assert!(!std::fs::read_to_string(&path).unwrap().contains("[skills]"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_last_choice_is_where_new_sessions_start() {
+        let dir = scratch("model-choice");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "# ours\nmouse = true\n\n[rules]\ndeny = []\n").unwrap();
+        save_choice(&path, "gpt-a", Some("high")).unwrap();
+        let config: Config = parse(&path).unwrap();
+        assert_eq!(config.model.as_deref(), Some("gpt-a"));
+        assert_eq!(config.effort.as_deref(), Some("high"));
+        assert_eq!(config.mouse, Some(true));
+        save_choice(&path, "gpt-b", None).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let config: Config = parse(&path).unwrap();
+        assert_eq!(config.model.as_deref(), Some("gpt-b"));
+        assert_eq!(config.effort, None);
+        assert!(text.starts_with("# ours"), "{text}");
+        assert!(
+            text.find("model").unwrap() < text.find("[rules]").unwrap(),
+            "{text}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

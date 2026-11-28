@@ -28,9 +28,12 @@ cargo run -p rho -- models           # the models your plan offers
   one's; older ones become a one-line stub it can act on by calling the tool again. A long turn drops its own oldest
   results in batches past 70% of the window. Only past 85% is a summary written, and when the model still finds the
   request too long, the turn ends with your message back in the composer and the footer's context share in red.
-- **Model and effort**: a session keeps the model and effort it last ran on, whatever your defaults become, until
-  you choose others for it (`--model`, `--effort`, `/model`, `/effort`; `/effort default` is the model's own level).
-  A new session starts on your config's `model` and `effort`, else the plan's first model at its default level.
+- **Model and effort**: `/model` lists the plan's models: ↑↓ choose one, which starts at its default effort, ←→
+  change the effort, Enter uses them. `/model <name>` (at its default effort), `/effort <level>` and `/effort default`
+  do the same from the composer. A choice holds for this session and becomes where new ones start: rho writes it to
+  `model` and `effort` in your config. A session keeps the model and effort it last ran on, whatever your defaults
+  become later; `--model` and `--effort` choose for one run without saving. With no `model` in the config, a new
+  session starts on the plan's first model at its default level.
 - **Rewind**: as each turn starts, rho snapshots the workspace (what `.gitignore` leaves out is left out) in a git
   repository of its own, never your `.git`. `/rewind` goes back to before one of your messages: the code, the
   conversation, or both. A conversation that goes back leaves the screen at that message, with the message back in
@@ -73,7 +76,7 @@ The `rules.toml` and `mcp.toml` of earlier versions are moved into it on first s
 | `~/.local/share/rho/sessions/<directory>` | Sessions, one JSON-lines file each |
 | `~/.local/share/rho/snapshots/<directory>.git` | The workspace as each turn found it |
 
-In the chat, `/help` lists the commands: `/model`, `/effort` (the levels the model has), `/tasks` and `/kill` for background commands
+In the chat, `/help` lists the commands: `/model` (the model and its effort), `/tasks` and `/kill` for background commands
 and subagents, `/rules`, `/rewind`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops
 it.
 

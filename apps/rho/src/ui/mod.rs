@@ -6,6 +6,7 @@ mod approval;
 mod files;
 mod layout;
 pub(crate) mod logs;
+mod models;
 mod rewind;
 mod screen;
 mod skills;
@@ -38,6 +39,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use self::approval::Ask;
 use self::logs::{LogLine, Logs};
+use self::models::ModelPicker;
 use self::rewind::{Outcome, Point, Restore, Rewind};
 use self::screen::ChatScreen;
 use self::skills::SkillsPicker;
@@ -60,11 +62,15 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "",
         "go back to before a message: the code, the conversation or both",
     ),
-    ("/model", "[model]", "the plan's models, or switch to one"),
+    (
+        "/model",
+        "[model]",
+        "choose the model and effort, for this session and new ones",
+    ),
     (
         "/effort",
         "[level]",
-        "how much the model reasons, from the levels it has",
+        "how much the model reasons, for this session and new ones",
     ),
     (
         "/tasks",
@@ -156,6 +162,10 @@ struct App {
     exploring: Option<(String, String, mpsc::UnboundedReceiver<Explored>)>,
     /// The `/skills` list, while it is open.
     skills_pick: Option<SkillsPicker>,
+    /// The `/model` list, while it is open.
+    model_pick: Option<ModelPicker>,
+    /// The model and effort `/new` starts on: the last chosen, else the config's.
+    start_with: (Option<String>, Option<Effort>),
     /// The session IDs of commands left running in the background.
     background: BTreeSet<u32>,
     /// The subagents this session started, oldest first, and what each running one does.
@@ -491,6 +501,14 @@ impl App {
             commands: None,
             exploring: None,
             skills_pick: None,
+            model_pick: None,
+            start_with: (
+                options
+                    .model
+                    .clone()
+                    .or_else(|| options.default_model.clone()),
+                options.effort.or(options.default_effort),
+            ),
             background: BTreeSet::new(),
             children: Vec::new(),
             progress: None,
@@ -789,6 +807,7 @@ impl App {
                     && self.rewind.is_none()
                     && self.tasks.is_none()
                     && self.skills_pick.is_none()
+                    && self.model_pick.is_none()
                     && self.viewing.is_none() =>
             {
                 self.picked = 0;
@@ -827,6 +846,17 @@ impl App {
                 Some(Outcome::Go(point, restore)) => {
                     self.rewind = None;
                     self.rewind_to(point, restore).await;
+                }
+                None => {}
+            }
+            return;
+        }
+        if let Some(pick) = &mut self.model_pick {
+            match pick.key(key) {
+                Some(models::Outcome::Cancel) => self.model_pick = None,
+                Some(models::Outcome::Choose(model, effort)) => {
+                    self.model_pick = None;
+                    self.use_model(model, effort).await;
                 }
                 None => {}
             }
@@ -1311,6 +1341,15 @@ impl App {
         match command {
             "/new" => {
                 let session = ready.runtime.session(&ready.agent, SessionId::new());
+                // It starts on the last model and effort chosen, which its first turn records.
+                let wanted = self.start_with.0.as_ref();
+                if let Some(model) = wanted
+                    .filter(|m| ready.models.iter().any(|x| &x.slug == *m))
+                    .or_else(|| ready.models.first().map(|m| &m.slug))
+                {
+                    self.model = model.clone();
+                }
+                self.effort = fit_effort(&ready.models, &self.model, &[self.start_with.1]);
                 self.forget_children();
                 self.view.clear();
                 self.view.notice(
@@ -1343,62 +1382,19 @@ impl App {
                     }
                 }
             },
-            "/model" if argument.is_empty() => {
-                for m in &ready.models {
-                    let mark = if m.slug == self.model { "● " } else { "  " };
-                    self.view.notice(
-                        Level::Info,
-                        format!("{mark}{:<24}{}", m.slug, m.display_name),
-                    );
-                }
+            "/model" | "/effort" if argument.is_empty() => {
+                self.model_pick = Some(ModelPicker::new(&ready.models, &self.model, self.effort));
             }
             "/model" => {
-                if !ready.models.iter().any(|m| m.slug == argument) {
+                if ready.models.iter().any(|m| m.slug == argument) {
+                    // A model starts at its own default effort.
+                    let effort = default_effort(&ready.models, argument)
+                        .or_else(|| fit_effort(&ready.models, argument, &[self.effort]));
+                    self.use_model(argument.to_owned(), effort).await;
+                } else {
                     self.view.notice(
                         Level::Warn,
                         format!("the plan has no model {argument}; /model lists them"),
-                    );
-                } else {
-                    match ready.session.set_model(argument).await {
-                        Ok(()) => {
-                            self.model = argument.to_owned();
-                            self.view.notice(Level::Info, format!("model {argument}"));
-                            // An effort the new model does not have becomes its default.
-                            let effort = fit_effort(&ready.models, argument, &[self.effort]);
-                            if effort != self.effort
-                                && let Some(effort) = effort
-                                && ready.session.set_reasoning(effort).await.is_ok()
-                            {
-                                self.effort = Some(effort);
-                                self.view.notice(
-                                    Level::Info,
-                                    format!(
-                                        "effort {}, {argument}'s default",
-                                        effort_label(self.effort)
-                                    ),
-                                );
-                            }
-                        }
-                        Err(error) => self
-                            .view
-                            .notice(Level::Error, format!("could not switch: {error}")),
-                    }
-                }
-            }
-            "/effort" if argument.is_empty() => {
-                self.view.notice(
-                    Level::Info,
-                    format!("effort is {}", effort_label(self.effort)),
-                );
-                for (effort, about) in efforts(&ready.models, &self.model) {
-                    let mark = if Some(effort) == self.effort {
-                        "● "
-                    } else {
-                        "  "
-                    };
-                    self.view.notice(
-                        Level::Info,
-                        format!("{mark}{:<8}{about}", effort_label(Some(effort))),
                     );
                 }
             }
@@ -1411,22 +1407,7 @@ impl App {
                             self.model
                         ),
                     ),
-                    Some(effort) => match ready.session.set_reasoning(effort).await {
-                        Ok(()) => {
-                            self.effort = Some(effort);
-                            self.view.notice(
-                                Level::Info,
-                                format!(
-                                    "effort {}, {}'s default",
-                                    effort_label(self.effort),
-                                    self.model
-                                ),
-                            );
-                        }
-                        Err(error) => self
-                            .view
-                            .notice(Level::Error, format!("could not set the effort: {error}")),
-                    },
+                    Some(effort) => self.use_model(self.model.clone(), Some(effort)).await,
                 }
             }
             "/effort" => match parse_effort(argument) {
@@ -1444,16 +1425,7 @@ impl App {
                         ),
                     );
                 }
-                Ok(effort) => match ready.session.set_reasoning(effort).await {
-                    Ok(()) => {
-                        self.effort = Some(effort);
-                        self.view
-                            .notice(Level::Info, format!("effort {}", effort_label(self.effort)));
-                    }
-                    Err(error) => self
-                        .view
-                        .notice(Level::Error, format!("could not set the effort: {error}")),
-                },
+                Ok(effort) => self.use_model(self.model.clone(), Some(effort)).await,
                 Err(error) => self.view.notice(Level::Warn, error),
             },
             "/rewind" => match rewind_points(&ready.session).await {
@@ -1699,6 +1671,51 @@ impl App {
             Err(error) => self
                 .view
                 .notice(Level::Error, format!("Could not resume session: {error}")),
+        }
+    }
+
+    /// Switches this session to `model` at `effort`, and makes them where new sessions start, here and in the
+    /// config.
+    async fn use_model(&mut self, model: String, effort: Option<Effort>) {
+        let Some(ready) = &self.ready else { return };
+        if model != self.model
+            && let Err(error) = ready.session.set_model(model.clone()).await
+        {
+            self.view
+                .notice(Level::Error, format!("could not switch: {error}"));
+            return;
+        }
+        self.model = model;
+        if let Some(effort) = effort.filter(|e| Some(*e) != self.effort) {
+            match ready.session.set_reasoning(effort).await {
+                Ok(()) => self.effort = Some(effort),
+                Err(error) => self
+                    .view
+                    .notice(Level::Error, format!("could not set the effort: {error}")),
+            }
+        }
+        self.start_with = (Some(self.model.clone()), self.effort);
+        let label = self.effort.map(|e| effort_label(Some(e)));
+        let saved = crate::paths::save_choice(&ready.config_path, &self.model, label.as_deref());
+        let default =
+            if self.effort.is_some() && self.effort == default_effort(&ready.models, &self.model) {
+                ", its default"
+            } else {
+                ""
+            };
+        self.view.notice(
+            Level::Info,
+            format!(
+                "{} at {} effort{default}; new sessions start on it too",
+                self.model,
+                effort_label(self.effort)
+            ),
+        );
+        if let Err(error) = saved {
+            self.view.notice(
+                Level::Warn,
+                format!("could not save it to your config: {error:#}"),
+            );
         }
     }
 
