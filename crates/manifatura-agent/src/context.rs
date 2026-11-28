@@ -232,7 +232,7 @@ pub fn estimate_tokens(m: &Message) -> u64 {
         .content
         .iter()
         .map(|c| match c {
-            Content::Text { text } => text.len(),
+            Content::Text { text, .. } => text.len(),
             Content::Thinking { text, .. } => text.len(),
             Content::ToolCall { name, input, .. } => name.len() + input.to_string().len(),
             Content::ToolResult { output, .. } => output.len(),

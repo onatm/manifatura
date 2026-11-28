@@ -37,7 +37,7 @@ The context window is what the loop reports in events and what `kit::compaction:
 
 ## OpenAI's Responses API and Sign in with ChatGPT
 
-With the `providers-responses` feature, `providers::responses::Responses` speaks OpenAI's Responses API. It is stateless (`store: false`, the whole conversation in every request) and sends reasoning back as the encrypted items the API returned. Its bearer token comes from a key or from `Credentials`, a trait for tokens that refresh:
+With the `providers-responses` feature, `providers::responses::Responses` speaks OpenAI's Responses API. It is stateless (`store: false`, the whole conversation in every request) and sends reasoning back as the encrypted items the API returned. Each message the model writes keeps its `phase`, an update while it works or its final answer (`Content::Text::phase`), which the models that give one need back on later requests. Its bearer token comes from a key or from `Credentials`, a trait for tokens that refresh:
 
 ```rust
 use manifatura::providers::responses::Responses;

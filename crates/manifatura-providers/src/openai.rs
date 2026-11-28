@@ -167,10 +167,10 @@ fn push_message(out: &mut Vec<Value>, m: &Message) {
                 .content
                 .iter()
                 .filter_map(|c| match c {
-                    Content::Text { text } if m.role == Role::System => {
+                    Content::Text { text, .. } if m.role == Role::System => {
                         Some(json!({ "type": "text", "text": system_note_text(text) }))
                     }
-                    Content::Text { text } => Some(json!({ "type": "text", "text": text })),
+                    Content::Text { text, .. } => Some(json!({ "type": "text", "text": text })),
                     Content::Image { media_type, data } => Some(json!({
                         "type": "image_url",
                         "image_url": { "url": format!("data:{media_type};base64,{data}") }

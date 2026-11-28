@@ -190,9 +190,7 @@ async fn a_child_that_runs_out_of_steps_reports_what_it_had() {
         )
         .respond(testing::reply(
             vec![
-                Content::Text {
-                    text: "Halfway there.".into(),
-                },
+                Content::text("Halfway there."),
                 Content::ToolCall {
                     id: "c".into(),
                     name: "grant".into(),
@@ -318,14 +316,7 @@ async fn aborting_the_parent_aborts_the_child() {
     let provider = ScriptedProvider::new()
         .call(TASK_TOOL, json!({"agent": "explore", "prompt": "Wait"}))
         .call("wait", json!({}))
-        .fallback(|_| {
-            testing::reply(
-                vec![Content::Text {
-                    text: "late".into(),
-                }],
-                StopReason::Stop,
-            )
-        });
+        .fallback(|_| testing::reply(vec![Content::text("late")], StopReason::Stop));
     let wait = Tool::new("wait", "Waits until aborted.").run_json(
         json!({"type": "object"}),
         |_input: Value, cx: ToolCx| async move {

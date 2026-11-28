@@ -52,7 +52,7 @@ pub use tool::{
     IntoToolResult, Json, Tool, ToolBuilder, ToolCx, ToolError, ToolHandler, ToolResult, schema_for,
 };
 pub use types::{
-    Content, Effort, ErrorKind, Grammar, GrammarSyntax, Message, ModelInfo, ModelRequest,
+    Content, Effort, ErrorKind, Grammar, GrammarSyntax, Message, ModelInfo, ModelRequest, Phase,
     ProviderError, Response, Role, StopReason, StreamEvent, TEXT_INPUT, ToolCall, ToolChoice,
     ToolFormat, ToolSpec, Usage, system_note_text, text_input_schema,
 };

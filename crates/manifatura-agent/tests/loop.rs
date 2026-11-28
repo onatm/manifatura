@@ -712,7 +712,7 @@ async fn response_hook_changes_what_is_recorded() {
 async fn step_end_reports_usage_and_context() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let s2 = seen.clone();
-    let mut resp = reply(vec![Content::Text { text: "ok".into() }], StopReason::Stop);
+    let mut resp = reply(vec![Content::text("ok")], StopReason::Stop);
     resp.usage.input = 1_000;
     resp.usage.output = 10;
     let p = ScriptedProvider::new().respond(resp);
@@ -1024,14 +1024,8 @@ async fn runtime_hooks_apply_to_sessions_a_tool_opens() {
 
 #[tokio::test]
 async fn compaction_never_runs_by_itself() {
-    let p = ScriptedProvider::new().fallback(|_| {
-        reply(
-            vec![Content::Text {
-                text: "word ".repeat(2_000),
-            }],
-            StopReason::Stop,
-        )
-    });
+    let p = ScriptedProvider::new()
+        .fallback(|_| reply(vec![Content::text("word ".repeat(2_000))], StopReason::Stop));
     let rt = runtime(&p, mem());
     let s = rt.session(&Agent::new("x").context_window(2_000), SessionId::new());
     for i in 0..5 {

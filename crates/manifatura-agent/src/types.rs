@@ -3,6 +3,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// What a text block of the model's is for (OpenAI's Responses API calls it the `phase`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Phase {
+    /// An update while it works, before tool calls.
+    Commentary,
+    /// Its answer for the turn.
+    FinalAnswer,
+}
+
 /// Who a message is from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +38,10 @@ pub enum Content {
     Text {
         /// The text.
         text: String,
+        /// What the text is for, when the provider says: an update while the model works, or
+        /// its final answer. Providers that distinguish them need it back on later requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<Phase>,
     },
     /// The model's reasoning before it answers.
     Thinking {
@@ -65,6 +80,16 @@ pub enum Content {
     },
 }
 
+impl Content {
+    /// A text block without a phase.
+    pub fn text(text: impl Into<String>) -> Self {
+        Content::Text {
+            text: text.into(),
+            phase: None,
+        }
+    }
+}
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -86,24 +111,24 @@ impl Message {
 
     /// A user message of one text block.
     pub fn user(text: impl Into<String>) -> Self {
-        Self::new(Role::User, vec![Content::Text { text: text.into() }])
+        Self::new(Role::User, vec![Content::text(text)])
     }
 
     /// An assistant message of one text block.
     pub fn assistant(text: impl Into<String>) -> Self {
-        Self::new(Role::Assistant, vec![Content::Text { text: text.into() }])
+        Self::new(Role::Assistant, vec![Content::text(text)])
     }
 
     /// A [`Role::System`] note of one text block.
     pub fn system_note(text: impl Into<String>) -> Self {
-        Self::new(Role::System, vec![Content::Text { text: text.into() }])
+        Self::new(Role::System, vec![Content::text(text)])
     }
 
     /// Concatenated text blocks.
     pub fn text(&self) -> String {
         let mut out = String::new();
         for c in &self.content {
-            if let Content::Text { text } = c {
+            if let Content::Text { text, .. } = c {
                 out.push_str(text);
             }
         }

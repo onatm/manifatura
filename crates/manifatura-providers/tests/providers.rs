@@ -414,6 +414,54 @@ mod responses {
     }
 
     #[tokio::test]
+    async fn each_message_keeps_its_phase_and_sends_it_back() {
+        let d = |v: Value| format!("event: x\ndata: {v}\n\n");
+        let chunks = vec![
+            d(
+                json!({"type":"response.output_item.added","item":{"type":"message","role":"assistant","phase":"commentary"}}),
+            ),
+            d(json!({"type":"response.output_text.delta","delta":"Checking."})),
+            d(
+                json!({"type":"response.output_item.added","item":{"type":"message","role":"assistant","phase":"final_answer"}}),
+            ),
+            d(json!({"type":"response.output_text.delta","delta":"Done."})),
+            d(
+                json!({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2}}}),
+            ),
+        ];
+        let done = vec![d(
+            json!({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":0}}}),
+        )];
+        let (mock, url) = Mock::start(vec![sse(chunks), sse(done)]).await;
+        let p = Responses::new(format!("{url}/v1"));
+        let (_, r) = collect(&p, request()).await;
+        assert_eq!(
+            r.message.content,
+            [
+                Content::Text {
+                    text: "Checking.".into(),
+                    phase: Some(Phase::Commentary)
+                },
+                Content::Text {
+                    text: "Done.".into(),
+                    phase: Some(Phase::FinalAnswer)
+                },
+            ]
+        );
+        // Sent back, each message carries its phase; one without a phase carries none.
+        let mut req = request();
+        req.messages.push(r.message);
+        req.messages
+            .push(Message::new(Role::Assistant, vec![Content::text("Old.")]));
+        collect(&p, req).await;
+        let input = mock.requests()[1].1["input"].clone();
+        let n = input.as_array().unwrap().len();
+        assert_eq!(input[n - 3]["phase"], "commentary");
+        assert_eq!(input[n - 2]["phase"], "final_answer");
+        assert!(input[n - 1].get("phase").is_none());
+    }
+
+    #[tokio::test]
     async fn streams_a_free_form_call_as_text_input() {
         let d = |v: Value| format!("event: x\ndata: {v}\n\n");
         let patch = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch";

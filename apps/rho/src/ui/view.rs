@@ -731,7 +731,7 @@ impl View {
             }
             for content in &message.content {
                 match (message.role, content) {
-                    (Role::User, Content::Text { text }) => self.push(Item::User(typed(text))),
+                    (Role::User, Content::Text { text, .. }) => self.push(Item::User(typed(text))),
                     (Role::Assistant, Content::Thinking { text, .. })
                         if !text.trim().is_empty() =>
                     {
@@ -740,7 +740,7 @@ impl View {
                             seconds: None,
                         })
                     }
-                    (Role::Assistant, Content::Text { text }) if !text.trim().is_empty() => {
+                    (Role::Assistant, Content::Text { text, .. }) if !text.trim().is_empty() => {
                         self.push(Item::Assistant(text.clone()))
                     }
                     (Role::Assistant, Content::ToolCall { id, name, input }) => {

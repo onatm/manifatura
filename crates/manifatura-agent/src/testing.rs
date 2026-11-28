@@ -45,10 +45,7 @@ impl ScriptedProvider {
 
     /// Replies with text and stops.
     pub fn text(self, text: &str) -> Self {
-        self.respond(reply(
-            vec![Content::Text { text: text.into() }],
-            StopReason::Stop,
-        ))
+        self.respond(reply(vec![Content::text(text)], StopReason::Stop))
     }
 
     /// Calls one tool.
@@ -118,7 +115,7 @@ impl Provider for ScriptedProvider {
             .content
             .iter()
             .filter_map(|c| match c {
-                Content::Text { text } => Some(StreamEvent::TextDelta(text.clone())),
+                Content::Text { text, .. } => Some(StreamEvent::TextDelta(text.clone())),
                 _ => None,
             })
             .collect();

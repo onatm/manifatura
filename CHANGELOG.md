@@ -4,6 +4,7 @@ All notable changes are recorded here. The project follows [Semantic Versioning]
 
 ## Unreleased
 
+- **Breaking:** `Content::Text` gains `phase: Option<Phase>`, what the text is for (`Commentary` while the model works, `FinalAnswer`), so patterns need `..` and new blocks `Content::text("…")`. `Responses` reads the phase of each message item and sends it back, as OpenAI asks of the models that give one.
 - **Breaking:** `manifatura-models` is now `manifatura-providers`, re-exported as `manifatura::providers`; the facade feature `models-openai` is now `providers-openai` (still on by default). Types and functions keep their names (`Models`, `OpenAi`, `from_env`, `ProviderConfig`).
 - `manifatura-providers`: `responses::Responses` (`responses` feature; `providers-responses` in the facade), a provider for OpenAI's Responses API: stateless, with encrypted reasoning sent back, tools optionally grouped in a namespace, and its bearer token from a key or from `Credentials`, a trait for tokens that refresh. It sends the request's `tool_choice`.
 - **Breaking:** `ToolSpec` is `#[non_exhaustive]`: build one with `ToolSpec::new(name, description, input_schema)` or `ToolSpec::text(name, description, grammar)`.

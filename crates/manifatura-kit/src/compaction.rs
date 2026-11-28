@@ -404,13 +404,13 @@ pub fn transcript(messages: &[Message], max_chars: usize) -> String {
         for m in messages {
             for c in &m.content {
                 match (m.role, c) {
-                    (Role::System, Content::Text { text }) => {
+                    (Role::System, Content::Text { text, .. }) => {
                         out.push_str(&format!("[system note]\n{text}\n\n"))
                     }
-                    (Role::User, Content::Text { text }) => {
+                    (Role::User, Content::Text { text, .. }) => {
                         out.push_str(&format!("[user]\n{text}\n\n"))
                     }
-                    (_, Content::Text { text }) => {
+                    (_, Content::Text { text, .. }) => {
                         out.push_str(&format!("[assistant]\n{text}\n\n"))
                     }
                     (_, Content::ToolCall { id, name, input }) => {

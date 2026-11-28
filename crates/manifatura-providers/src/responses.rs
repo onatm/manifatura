@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use futures_util::stream::BoxStream;
 use manifatura_agent::{
-    Abort, Content, ErrorKind, Grammar, Message, ModelRequest, Provider, ProviderError, Response,
-    Role, StopReason, StreamEvent, TEXT_INPUT, ToolFormat, ToolSpec, system_note_text,
+    Abort, Content, ErrorKind, Grammar, Message, ModelRequest, Phase, Provider, ProviderError,
+    Response, Role, StopReason, StreamEvent, TEXT_INPUT, ToolFormat, ToolSpec, system_note_text,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -264,10 +264,17 @@ impl Replay<'_> {
                             };
                             out.push(json!({ "type": "reasoning", "summary": summary, "encrypted_content": enc }));
                         }
-                        Content::Text { text } if !text.is_empty() => out.push(json!({
-                            "type": "message", "role": "assistant",
-                            "content": [{ "type": "output_text", "text": text }]
-                        })),
+                        Content::Text { text, phase } if !text.is_empty() => {
+                            let mut item = json!({
+                                "type": "message", "role": "assistant",
+                                "content": [{ "type": "output_text", "text": text }]
+                            });
+                            // The models that give a phase need it back.
+                            if let Some(phase) = phase {
+                                item["phase"] = json!(phase);
+                            }
+                            out.push(item);
+                        }
                         Content::ToolCall { id, name, input }
                             if self.text_tools.contains(name.as_str()) =>
                         {
@@ -297,10 +304,10 @@ impl Replay<'_> {
                 .content
                 .iter()
                 .filter_map(|c| match c {
-                    Content::Text { text } if m.role == Role::System => {
+                    Content::Text { text, .. } if m.role == Role::System => {
                         Some(json!({ "type": "input_text", "text": system_note_text(text) }))
                     }
-                    Content::Text { text } => Some(json!({ "type": "input_text", "text": text })),
+                    Content::Text { text, .. } => Some(json!({ "type": "input_text", "text": text })),
                     Content::Image { media_type, data } => Some(json!({
                         "type": "input_image", "image_url": format!("data:{media_type};base64,{data}")
                     })),
@@ -316,6 +323,11 @@ impl Replay<'_> {
 }
 
 /// The kind of a failure the API reports by code.
+/// A message item's `phase`, when it has one this crate knows.
+fn phase_of(v: &Value) -> Option<Phase> {
+    serde_json::from_value(v.clone()).ok()
+}
+
 fn kind_of(code: &str) -> ErrorKind {
     match code {
         "context_length_exceeded" => ErrorKind::ContextOverflow,
@@ -407,6 +419,10 @@ impl Responses {
                         acc.thinking(t);
                         deltas.push(StreamEvent::ReasoningDelta(t.to_string()));
                     }
+                }
+                // Each message item says what it is for; its text goes to a block of its own.
+                "response.output_item.added" if v["item"]["type"] == "message" => {
+                    acc.message(phase_of(&v["item"]["phase"]));
                 }
                 "response.output_item.done" if v["item"]["type"] == "reasoning" => {
                     if let Some(enc) = v["item"]["encrypted_content"].as_str() {

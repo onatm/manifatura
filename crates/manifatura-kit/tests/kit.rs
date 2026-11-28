@@ -12,7 +12,7 @@ fn runtime(p: &ScriptedProvider) -> Runtime {
 }
 
 fn text(t: &str) -> Response {
-    reply(vec![Content::Text { text: t.into() }], StopReason::Stop)
+    reply(vec![Content::text(t)], StopReason::Stop)
 }
 
 fn is_summary_request(r: &ModelRequest) -> bool {
