@@ -86,11 +86,12 @@ pub(crate) struct Prepared {
     /// The session's conversation so far, when it was resumed.
     pub(crate) history: Vec<Message>,
     pub(crate) store: Arc<JsonlStore>,
-    pub(crate) summarizer: Arc<Summarizer>,
     /// The instruction files the prompt includes.
     pub(crate) files: Vec<PathBuf>,
     /// The skills the prompt lists, which `/name` also starts.
     pub(crate) skills: SkillSet,
+    /// The session whose turn last failed for want of room, even after a summary.
+    pub(crate) overflowed: Overflowed,
     /// The subagents behind the `task` tool, which `/explore` also starts.
     pub(crate) subagents: Subagents,
     /// What the running subagents do, event by event, for the screen to follow them.
@@ -231,11 +232,8 @@ pub(crate) async fn prepare(
     let policy = policy(&cwd, &rules_path, &exec, &mut problems)?;
     let approvals = Approvals::new();
     let summarizer = Arc::new(Summarizer::default());
+    let overflowed = Overflowed::default();
     let provider = Catalog::new(sign_in.provider(), &models);
-    let window = options
-        .context_window
-        .or_else(|| provider.window(&model))
-        .unwrap_or(DEFAULT_WINDOW);
     let mut agent = Agent::new(instructions)
         .name(AGENT_NAME)
         .model(model.clone())
@@ -255,9 +253,12 @@ pub(crate) async fn prepare(
         .hooks(policy.hooks(&approvals))
         .hooks(exec.hooks())
         .hooks(snapshots.hooks())
-        .hooks(kit::compaction::trim_results(u64::from(window) / 2, 8_000))
+        // Older turns' tool results stay in the session but out of the requests; a summary is asked for only past
+        // 85% of the window, or when the provider still finds the request too long.
+        .hooks(kit::compaction::drop_old_results())
         .hooks(kit::compaction::auto(0.85, summarizer.clone()))
-        .hooks(kit::compaction::on_overflow(summarizer.clone()))
+        .hooks(kit::compaction::on_overflow(summarizer))
+        .hooks(overflow_seen(&overflowed))
         .hooks(kit::system_delta());
 
     let runtime = Runtime::builder()
@@ -297,9 +298,9 @@ pub(crate) async fn prepare(
         session,
         history,
         store,
-        summarizer,
         files: files.into_iter().map(|file| file.path).collect(),
         skills,
+        overflowed,
         subagents,
         progress: Some(watched),
         snapshots,
@@ -315,6 +316,23 @@ pub(crate) async fn prepare(
         model,
         effort,
         account: account.email.or(Some(account.subject)),
+    })
+}
+
+/// The session whose turn last failed because its context no longer fit the window.
+pub(crate) type Overflowed = Arc<std::sync::Mutex<Option<SessionId>>>;
+
+/// After `on_overflow` has had its go: a request still too long marks its session, so the screen can say what to do.
+fn overflow_seen(overflowed: &Overflowed) -> manifatura::Hooks {
+    let overflowed = overflowed.clone();
+    manifatura::Hooks::new().on(move |e: manifatura::hook::ModelError, cx| {
+        let overflowed = overflowed.clone();
+        async move {
+            if e.error.kind == manifatura::ErrorKind::ContextOverflow {
+                *overflowed.lock().unwrap() = Some(cx.session_id().clone());
+            }
+            manifatura::hook::Recover::Fail
+        }
     })
 }
 
@@ -407,8 +425,8 @@ impl Provider for Catalog {
     }
 
     fn model_info(&self, model: &str) -> Option<ModelInfo> {
-        let context_window = self.window(model)?;
-        // Only a compaction's summary is held to it.
+        let context_window = self.window(model).unwrap_or(DEFAULT_WINDOW);
+        // Only a summary is held to it.
         Some(ModelInfo {
             context_window,
             max_output: 32_000,

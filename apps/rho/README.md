@@ -24,6 +24,10 @@ cargo run -p rho -- models           # the models your plan offers
   typing into one that runs there, and MCP tools. Each question offers once, the session, "always" (a rule
   like `exec_command(git commit)`, saved to your rules), or deny.
 
+- **Context**: the session keeps every tool result, but the model is sent only the current turn's and the previous
+  one's; older ones become a one-line stub it can act on by calling the tool again. A long turn drops its own oldest
+  results in batches past 70% of the window. Only past 85% is a summary written, and when the model still finds the
+  request too long, the turn ends with your message back in the composer and the footer's context share in red.
 - **Rewind**: as each turn starts, rho snapshots the workspace (what `.gitignore` leaves out is left out) in a git
   repository of its own, never your `.git`. `/rewind` goes back to before one of your messages: the code, the
   conversation, or both. A conversation that goes back leaves the screen at that message, with the message back in
@@ -42,7 +46,7 @@ cargo run -p rho -- models           # the models your plan offers
 | `~/.local/share/rho/snapshots/<directory>.git` | The workspace as each turn found it |
 
 In the chat, `/help` lists the commands: `/model`, `/effort` (the levels the model has), `/tasks` and `/kill` for background commands
-and subagents, `/rules`, `/rewind`, `/compact`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops
+and subagents, `/rules`, `/rewind`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops
 it.
 
 The background tasks are the commands left running and the subagents started. ↓ on an empty composer (or `/tasks`, or a click on

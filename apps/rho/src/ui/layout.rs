@@ -305,7 +305,6 @@ impl App {
                 Activity::Thinking => "Thinking".into(),
                 Activity::Generating => "Writing".into(),
                 Activity::Running => self.view.running_label(),
-                Activity::Compacting => "Compacting".into(),
             }
         };
         let time = self.view.since.map_or_else(String::new, |since| {
@@ -349,11 +348,19 @@ impl App {
             self.model.clone(),
             format!("{} effort", self.effort_label()),
         ];
+        // A window filling up shows: yellow from 80%, red from 95%.
+        let mut warn = None;
         match self.context {
-            Some((used, Some(window))) => parts.push(format!(
-                "{}% context",
-                used * 100 / u64::from(window).max(1)
-            )),
+            Some((used, Some(window))) => {
+                let share = used * 100 / u64::from(window).max(1);
+                parts.push(format!("{share}% context"));
+                warn = match share {
+                    95.. => Some(Color::Red),
+                    80.. => Some(Color::Yellow),
+                    _ => None,
+                }
+                .map(|color| (parts.len() - 1, color));
+            }
             Some((used, None)) => parts.push(format!("{} context", tokens(used))),
             None => {}
         }
@@ -370,8 +377,7 @@ impl App {
             parts = vec![format!("{} subagent", child.agent), child.state()];
         }
         let mut left = parts.join(" · ");
-        // The tasks label answers clicks.
-        self.tasks_button = tasks_at.filter(|_| viewing.is_none()).map(|at| {
+        let at = |parts: &[String], at: usize| {
             let before = parts[..at]
                 .iter()
                 .map(|p| Line::raw(p.as_str()).width() + 3)
@@ -381,7 +387,14 @@ impl App {
                 width: Line::raw(parts[at].as_str()).width() as u16,
                 ..body
             }
-        });
+        };
+        let warn = warn
+            .filter(|_| viewing.is_none())
+            .map(|(i, color)| (at(&parts, i), parts[i].clone(), color));
+        // The tasks label answers clicks.
+        self.tasks_button = tasks_at
+            .filter(|_| viewing.is_none())
+            .map(|i| at(&parts, i));
         let tasks = self.tasks_button.is_some() || !self.children.is_empty();
         let hint = if viewing.is_some() {
             "← → switch · ↓ tasks · Esc back"
@@ -405,7 +418,9 @@ impl App {
         if gap > 0 {
             left.push_str(&" ".repeat(gap));
             left.push_str(hint);
-        } else if self.view.is_busy() || self.files.active() {
+        }
+        let replaced = gap == 0 && (self.view.is_busy() || self.files.active());
+        if replaced {
             left = hint.to_owned();
             self.tasks_button = None;
         }
@@ -414,5 +429,9 @@ impl App {
             button.width = button.width.min(body.right().saturating_sub(button.x));
         }
         f.render_widget(Line::styled(left, dim()), body);
+        if let Some((mut area, text, color)) = warn.filter(|_| !replaced) {
+            area.width = area.width.min(body.right().saturating_sub(area.x));
+            f.render_widget(Line::styled(text, Style::new().fg(color)), area);
+        }
     }
 }

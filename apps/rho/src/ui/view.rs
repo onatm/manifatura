@@ -504,7 +504,6 @@ pub(crate) enum Activity {
     Thinking,
     Generating,
     Running,
-    Compacting,
 }
 
 struct Running {

@@ -62,11 +62,6 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "<question>",
         "hand a question about the code to the explore subagent",
     ),
-    (
-        "/compact",
-        "[focus]",
-        "summarise older messages to make room",
-    ),
     ("/model", "[model]", "the plan's models, or switch to one"),
     (
         "/effort",
@@ -577,8 +572,11 @@ impl App {
                     self.forget_finished();
                 }
             }
-            Event::TurnCompleted { .. } => {
+            Event::TurnCompleted { outcome, .. } => {
                 self.abort = None;
+                if *outcome == manifatura::Outcome::Failed {
+                    self.overflowed().await;
+                }
                 // A first turn is what puts a new session in the store.
                 if let Some(ready) = &self.ready {
                     match recent_sessions(ready.store.as_ref()).await {
@@ -647,6 +645,37 @@ impl App {
         self.viewing = None;
         self.stashed = None;
         self.tasks = None;
+    }
+
+    /// After a turn failed: one that no longer fit the window, even after a summary, goes back to before its
+    /// message, which returns to the composer to send again once there is room.
+    async fn overflowed(&mut self) {
+        let Some(ready) = &self.ready else { return };
+        let ours = {
+            let mut overflowed = ready.overflowed.lock().unwrap();
+            let ours = overflowed.as_ref() == Some(ready.session.id());
+            if ours {
+                *overflowed = None;
+            }
+            ours
+        };
+        if !ours {
+            return;
+        }
+        let last = rewind_points(&ready.session)
+            .await
+            .ok()
+            .and_then(|points| points.into_iter().next());
+        // Not over a draft, a subagent's screen, or a wake-up nobody typed.
+        if let Some(point) = last
+            .filter(|p| self.viewing.is_none() && self.text().is_empty() && p.text != typed(WAKE))
+        {
+            self.rewind_to(point, Restore::Conversation).await;
+        }
+        self.main_view().notice(
+            Level::Warn,
+            "the conversation no longer fits the model's window: /new, or /rewind to an earlier message",
+        );
     }
 
     /// Drops the background commands the agent no longer keeps.
@@ -1319,16 +1348,6 @@ impl App {
                 "/explore <question>: what to find out about the code",
             ),
             "/explore" => self.explore(argument, line),
-            "/compact" => {
-                let focus = (!argument.is_empty()).then(|| argument.to_owned());
-                self.view.activity = Activity::Compacting;
-                let result = ready.session.compact(ready.summarizer.clone(), focus).await;
-                self.view.activity = Activity::Idle;
-                if let Err(error) = result {
-                    self.view
-                        .notice(Level::Error, format!("could not compact: {error}"));
-                }
-            }
             "/mcp" => {
                 if ready.servers.is_empty() {
                     let path = crate::paths::config_dir().join("mcp.toml");
@@ -1857,6 +1876,33 @@ mod tests {
     }
 
     #[test]
+    fn a_filling_window_turns_the_context_share_yellow_then_red() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+
+        let mut app = loading_app();
+        let colour = |app: &mut App| {
+            let mut term = Terminal::new(TestBackend::new(100, 8)).unwrap();
+            term.draw(|f| app.draw(f)).unwrap();
+            let buffer = term.backend().buffer().clone();
+            let row = buffer.area.height - 1;
+            let text: String = (0..buffer.area.width)
+                .map(|x| buffer[(x, row)].symbol())
+                .collect();
+            let at = text.find("% context").expect(&text);
+            let x = text[..at].chars().count() as u16 - 1;
+            buffer[(x, row)].fg
+        };
+        app.context = Some((100_000, Some(272_000)));
+        assert_eq!(colour(&mut app), Color::Reset);
+        app.context = Some((230_000, Some(272_000)));
+        assert_eq!(colour(&mut app), Color::Yellow);
+        app.context = Some((262_000, Some(272_000)));
+        assert_eq!(colour(&mut app), Color::Red);
+    }
+
+    #[test]
     fn enter_on_a_subagent_asks_to_show_it() {
         let mut app = loading_app();
         for agent in ["explore", "review"] {
@@ -1997,10 +2043,10 @@ mod tests {
             Vec::<String>::new(),
             "a complete id needs no completing"
         );
-        assert!(names("hello").is_empty() && names("/compact focus").is_empty());
+        assert!(names("hello").is_empty() && names("/explore focus").is_empty());
         assert!(
             completions("/new", &sessions, &[], &[])[0].runs
-                && !completions("/compact", &sessions, &[], &[])[0].runs
+                && !completions("/explore", &sessions, &[], &[])[0].runs
         );
         assert_eq!(names("/effort o"), ["/effort off"]);
         assert_eq!(names("/effort m"), ["/effort medium"]);
@@ -2034,7 +2080,7 @@ mod tests {
                 .iter()
                 .map(|c| c.text.as_str())
                 .collect::<Vec<_>>(),
-            ["/compact ", "/codebase-tour "]
+            ["/codebase-tour "]
         );
     }
 }
