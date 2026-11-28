@@ -1305,3 +1305,25 @@ async fn the_status_tells_what_the_session_recorded_from_what_it_inherits() {
         ("n", Some(Effort::High))
     );
 }
+
+#[test]
+fn an_agent_can_be_rebuilt_with_other_instructions_and_tools() {
+    let tool = |name: &str, about: &str| {
+        Tool::new(name, about).run_json(json!({"type": "object"}), |_, _| async { Ok("x") })
+    };
+    let agent = Agent::new("old")
+        .tool(tool("a", "First."))
+        .tool(tool("b", "B."));
+    let agent = agent
+        .with_instructions("new")
+        .with_tool(tool("a", "Second."))
+        .with_tool(tool("c", "C."))
+        .without_tool("b");
+    assert_eq!(agent.instructions(), "new");
+    let tools: Vec<(&str, &str)> = agent
+        .tool_list()
+        .iter()
+        .map(|t| (t.name(), t.spec().description.as_str()))
+        .collect();
+    assert_eq!(tools, [("a", "Second."), ("c", "C.")]);
+}

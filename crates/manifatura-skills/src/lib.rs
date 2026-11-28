@@ -42,10 +42,11 @@
 #![warn(missing_debug_implementations, missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use manifatura_agent::{Env, FileKind, Tool, ToolError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use manifatura_kit::context::{ContextFiles, SystemPrompt};
@@ -284,11 +285,54 @@ impl Skills {
     }
 }
 
+/// Who sees a skill. Absent from [`SkillSet::with_visibility`], a skill is [`On`](Self::On).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Visibility {
+    /// The catalog lists it with its description; the model and the user can start it.
+    #[default]
+    On,
+    /// The catalog lists only its name, to save context; the model and the user can start it.
+    NameOnly,
+    /// Left out of the catalog and the tool; only the user can start it.
+    UserOnly,
+    /// Left out everywhere.
+    Off,
+}
+
+impl Visibility {
+    /// The next state, as a picker cycles them: on, name-only, user-only, off, on.
+    pub fn next(self) -> Self {
+        match self {
+            Visibility::On => Visibility::NameOnly,
+            Visibility::NameOnly => Visibility::UserOnly,
+            Visibility::UserOnly => Visibility::Off,
+            Visibility::Off => Visibility::On,
+        }
+    }
+
+    /// Its name, as written in config: `on`, `name-only`, `user-only` or `off`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Visibility::On => "on",
+            Visibility::NameOnly => "name-only",
+            Visibility::UserOnly => "user-only",
+            Visibility::Off => "off",
+        }
+    }
+
+    /// Whether the model is told of it and may load it.
+    pub fn for_model(self) -> bool {
+        matches!(self, Visibility::On | Visibility::NameOnly)
+    }
+}
+
 /// The skills [`Skills::load`] found, and what it had to say about them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SkillSet {
     skills: Vec<Skill>,
     warnings: Vec<String>,
+    visibility: BTreeMap<String, Visibility>,
 }
 
 impl SkillSet {
@@ -321,6 +365,39 @@ impl SkillSet {
         }
     }
 
+    /// The same skills, each seen as `visibility` says (by name; absent ones are on).
+    pub fn with_visibility(mut self, visibility: BTreeMap<String, Visibility>) -> Self {
+        self.visibility = visibility;
+        self.visibility.retain(|_, v| *v != Visibility::On);
+        self
+    }
+
+    /// Who sees the skill called `name`.
+    pub fn visibility(&self, name: &str) -> Visibility {
+        self.visibility.get(name).copied().unwrap_or_default()
+    }
+
+    /// The skills the user may start: all but those that are off.
+    pub fn for_user(&self) -> impl Iterator<Item = &Skill> {
+        self.skills
+            .iter()
+            .filter(|s| self.visibility(&s.name) != Visibility::Off)
+    }
+
+    fn for_model(&self) -> impl Iterator<Item = &Skill> {
+        self.skills
+            .iter()
+            .filter(|s| self.visibility(&s.name).for_model())
+    }
+
+    /// The tokens its catalog entry costs the prompt, as [`section`](Self::section) writes it
+    /// when the skill is on: about four characters a token.
+    pub fn catalog_tokens(skill: &Skill) -> usize {
+        format!("- {}: {}\n", skill.name, one_line(&skill.description))
+            .len()
+            .div_ceil(4)
+    }
+
     fn warn(&mut self, warning: String) {
         self.warnings.push(warning);
     }
@@ -348,13 +425,18 @@ impl SkillSet {
     /// The catalog as a prompt section: a heading, then each skill's name and description.
     /// Empty when there are none. [`SystemPromptExt::skills`] adds it to a prompt; the
     /// [`SKILL_TOOL`] tool's guideline says when to use one.
+    /// Skills that are [name-only](Visibility::NameOnly) show their name alone; those the
+    /// model may not load are left out.
     pub fn section(&self) -> String {
-        if self.skills.is_empty() {
+        if self.for_model().next().is_none() {
             return String::new();
         }
         let mut out = format!("# Skills\n\nLoad these with the {SKILL_TOOL} tool:\n\n");
-        for s in &self.skills {
-            out.push_str(&format!("- {}: {}\n", s.name, one_line(&s.description)));
+        for s in self.for_model() {
+            match self.visibility(&s.name) {
+                Visibility::NameOnly => out.push_str(&format!("- {}\n", s.name)),
+                _ => out.push_str(&format!("- {}: {}\n", s.name, one_line(&s.description))),
+            }
         }
         out
     }
@@ -364,10 +446,10 @@ impl SkillSet {
     /// one that does not exist. It [keeps its results](manifatura_agent::ToolBuilder::keep_results),
     /// as a skill's instructions apply for the rest of the task.
     pub fn tool(&self) -> Option<Tool> {
-        if self.skills.is_empty() {
+        let names: Vec<&str> = self.for_model().map(|s| s.name.as_str()).collect();
+        if names.is_empty() {
             return None;
         }
-        let names: Vec<&str> = self.skills.iter().map(|s| s.name.as_str()).collect();
         let schema = json!({
             "type": "object",
             "properties": {
@@ -394,11 +476,19 @@ impl SkillSet {
                         .get("name")
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    match set.activation(name, cx.env().as_ref()).await {
+                    let known = set.visibility(name).for_model();
+                    match set
+                        .activation(name, cx.env().as_ref())
+                        .await
+                        .filter(|_| known)
+                    {
                         Some(text) => Ok(text),
                         None => Err(ToolError::msg(format!(
                             "no skill {name:?}; the skills are: {}",
-                            set.names().join(", ")
+                            set.for_model()
+                                .map(|s| s.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ))),
                     }
                 }
