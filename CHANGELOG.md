@@ -4,6 +4,7 @@ All notable changes are recorded here. The project follows [Semantic Versioning]
 
 ## Unreleased
 
+- `manifatura-subagents`: a subagent stops after `DEFAULT_MAX_STEPS` (50) model calls unless it sets its own limit (`Subagents::default_max_steps`), keeping the last for its report. A child like its parent runs on the model and effort its parent session uses now; `Subagent::model` and `effort`, and `model` and `effort` in a definition, choose others, and `Subagent::with` applies settings kept elsewhere. Tool names may use `*` (`mcp__github__*`), a deferred tool run through `run_tool` counts as itself, and `find_tools` comes with MCP patterns. `Subagents::list` and `Subagent::allowed_tools` read them back.
 - **Breaking:** `SessionStatus` is `#[non_exhaustive]` and gains `session_model` and `session_reasoning`, what the session itself recorded, apart from what it inherits from the agent.
 - `manifatura-auth`: `openai::Model::new`, a model known only by its id.
 - **Breaking:** `Content::Text` gains `phase: Option<Phase>`, what the text is for (`Commentary` while the model works, `FinalAnswer`), so patterns need `..` and new blocks `Content::text("…")`. `Responses` reads the phase of each message item and sends it back, as OpenAI asks of the models that give one.

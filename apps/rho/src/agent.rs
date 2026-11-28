@@ -5,7 +5,7 @@
 //! require_escalated`), and that, typing into a command outside it, and MCP tools ask through the agent's
 //! `Approvals`, unless a rule allows them. Reads, patches inside the workspace, plans and skills never ask.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -55,9 +55,15 @@ const ALLOWED: &[&str] = &[
 ];
 
 /// The subagents built into rho, as Markdown. Each runs rho's own agent (the same prompt and tools, so the
-/// provider's prompt cache serves it) with the file's body as its brief, calling only the tools its `tools` names
-/// and keeping the last of its `max_steps` for its report.
+/// provider's prompt cache serves it) on the session's model, with the file's body as its brief, calling only the
+/// tools its `tools` names and keeping the last of its steps for its report.
 const BUILTIN_AGENTS: &[&str] = &[include_str!("agents/explore.md")];
+
+/// Where a project keeps subagents of its own, beside yours in rho's config directory.
+pub(crate) const PROJECT_AGENTS: &str = ".rho/agents";
+
+/// What every subagent you define is told before its own instructions.
+const AGENT_PREAMBLE: &str = include_str!("agents/preamble.md");
 
 /// What the screen and the command line ask for.
 #[derive(Clone, Debug)]
@@ -237,7 +243,15 @@ pub(crate) async fn prepare(
     tools.extend(exec.tools());
     tools.push(crate::plan::update_plan());
     let (progress, watched) = tokio::sync::mpsc::unbounded_channel();
-    let subagents = subagents()?.on_event(move |p: &Progress| {
+    let project = paths::project_config(&cwd)?;
+    let subagents = subagents(
+        &cwd,
+        &options.agents,
+        &project.agents,
+        &models,
+        &mut problems,
+    )?
+    .on_event(move |p: &Progress| {
         let _ = progress.send(p.clone());
     });
     tools.push(subagents.tool());
@@ -284,7 +298,6 @@ pub(crate) async fn prepare(
     // rho's own repository, outside the workspace: git writes there unsandboxed, which only rho asks for.
     let snapshots = Snapshots::new(paths::snapshots_dir(&cwd)).unsandboxed(true);
     let config_path = paths::config_path();
-    let project = paths::project_config(&cwd)?;
     let policy = policy(
         &options.rules,
         project.rules.clone(),
@@ -398,15 +411,93 @@ fn skill_sources(home: Option<&Path>, compat: &[paths::Compat]) -> Skills {
 }
 
 /// The built-in subagents, for the `task` tool and `/explore`.
-fn subagents() -> Result<Subagents> {
-    let mut list = Vec::new();
+fn subagents(
+    cwd: &Path,
+    yours: &BTreeMap<String, paths::AgentConfig>,
+    project: &BTreeMap<String, paths::AgentConfig>,
+    models: &[Model],
+    problems: &mut Vec<String>,
+) -> Result<Subagents> {
+    let mut list: Vec<Subagent> = Vec::new();
+    let mut add = |sub: Subagent| match list.iter_mut().find(|s| s.name() == sub.name()) {
+        Some(have) => *have = sub,
+        None => list.push(sub),
+    };
     for text in BUILTIN_AGENTS {
         let definition = Definition::parse(text)
             .map_err(anyhow::Error::msg)
             .context("a built-in subagent")?;
-        list.push(Subagent::from_definition(definition));
+        add(Subagent::from_definition(definition));
+    }
+    // Yours, then the project's: a later one replaces an earlier one of the same name.
+    for dir in [paths::config_dir().join("agents"), cwd.join(PROJECT_AGENTS)] {
+        for (path, definition) in read_agents(&dir, problems) {
+            let mut definition = definition;
+            definition.body = format!("{AGENT_PREAMBLE}\n\n{}", definition.body.trim());
+            tracing::debug!("subagent {} from {}", definition.name, path.display());
+            add(Subagent::from_definition(definition));
+        }
+    }
+    // Then the settings in config.toml over what the files say.
+    for (name, config) in yours.iter().chain(project) {
+        let Some(at) = list.iter().position(|s| s.name() == name) else {
+            problems.push(format!("[agents.{name}]: there is no subagent {name}"));
+            continue;
+        };
+        let effort = match config.effort.as_deref().map(parse_effort).transpose() {
+            Ok(effort) => effort,
+            Err(error) => {
+                problems.push(format!("[agents.{name}]: {error}"));
+                None
+            }
+        };
+        if let Some(model) = &config.model
+            && !models.iter().any(|m| &m.slug == model)
+        {
+            problems.push(format!(
+                "[agents.{name}]: your plan does not list the model {model}"
+            ));
+        }
+        // A server's tools join the tools it may call; with no list, it may call them all already.
+        let base = config
+            .tools
+            .clone()
+            .or_else(|| list[at].allowed_tools().map(<[String]>::to_vec));
+        let tools = match (&config.mcp, base) {
+            (Some(servers), Some(mut tools)) => {
+                tools.extend(servers.iter().map(|server| format!("mcp__{server}__*")));
+                Some(tools)
+            }
+            (_, tools) => tools,
+        };
+        let sub = list[at].clone();
+        list[at] = sub.with(tools, config.model.clone(), effort);
     }
     Ok(Subagents::new(list))
+}
+
+/// The agents in `dir`, one Markdown file each; a file that does not read is left out with a problem.
+fn read_agents(dir: &Path, problems: &mut Vec<String>) -> Vec<(PathBuf, Definition)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "md"))
+        .collect();
+    paths.sort();
+    let mut found = Vec::new();
+    for path in paths {
+        match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| Definition::parse(&text))
+        {
+            Ok(definition) => found.push((path, definition)),
+            Err(error) => problems.push(format!("{}: {error}; left out", path.display())),
+        }
+    }
+    found
 }
 
 /// What asks and what may run: your rules, the project's (which may only ask and deny: a repository must not let
@@ -663,22 +754,60 @@ mod tests {
     }
 
     #[test]
-    fn explore_reads_and_searches_within_a_budget() {
+    fn agents_come_from_files_and_settings_change_them() {
         let explore = Definition::parse(BUILTIN_AGENTS[0]).unwrap();
         assert_eq!(
             explore.tools.as_deref(),
             Some(&["read".to_owned(), "grep".into(), "glob".into()][..])
         );
-        assert_eq!(explore.max_steps, Some(20));
-        let tool = subagents().unwrap().tool();
+        assert_eq!(explore.max_steps, None, "the default limit applies");
+
+        let dir = std::env::temp_dir().join(format!("rho-agents-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(PROJECT_AGENTS)).unwrap();
+        std::fs::write(
+            dir.join(PROJECT_AGENTS).join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Reviews a diff.\ntools: read, exec_command\n---\nFind bugs.\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join(PROJECT_AGENTS).join("broken.md"), "no frontmatter").unwrap();
+        let setting = |mcp: Option<&[&str]>, effort: Option<&str>| paths::AgentConfig {
+            mcp: mcp.map(|m| m.iter().map(|s| s.to_string()).collect()),
+            effort: effort.map(str::to_string),
+            ..Default::default()
+        };
+        let yours = BTreeMap::from([
+            ("explore".to_string(), setting(Some(&["exa"]), Some("low"))),
+            ("ghost".to_string(), setting(None, None)),
+        ]);
+        let mut problems = Vec::new();
+        let subagents = subagents(&dir, &yours, &BTreeMap::new(), &[], &mut problems).unwrap();
+        let tool = subagents.tool();
         assert_eq!(tool.name(), "task");
+        let about = &tool.spec().description;
         assert!(
-            tool.spec()
-                .description
-                .contains("- explore: Answers one question"),
-            "{}",
-            tool.spec().description
+            about.contains("- explore: Answers one question")
+                && about.contains("- reviewer: Reviews a diff."),
+            "{about}"
         );
+        let explore = subagents
+            .list()
+            .iter()
+            .find(|s| s.name() == "explore")
+            .unwrap();
+        assert_eq!(
+            explore.allowed_tools().unwrap(),
+            ["read", "grep", "glob", "mcp__exa__*"]
+        );
+        assert!(
+            problems.iter().any(|p| p.contains("broken.md")),
+            "{problems:?}"
+        );
+        assert!(
+            problems.iter().any(|p| p.contains("no subagent ghost")),
+            "{problems:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn model(slug: &str, default: Option<Effort>, efforts: &[Effort]) -> Model {

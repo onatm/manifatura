@@ -15,7 +15,7 @@ cargo run -p rho -- models           # the models your plan offers
 
 - **Tools**: `read`, `grep`, `glob`, `apply_patch` (Codex's patch format), `exec_command` and `write_stdin`
   (commands that keep running in the background), `update_plan`, `task` with an `explore` subagent (read, grep and
-  glob only, 20 steps; also `/explore <question>`), skills from `.agents/skills`, and MCP servers. A command left
+  glob only; also `/explore <question>`) and the subagents you define, skills, and MCP servers. A command left
   in the background that exits while rho is idle wakes it to carry on.
 - **Sandbox**: every command runs in it (macOS Seatbelt, Linux bubblewrap): it writes only in the workspace,
   the scratch directory and `/tmp`, never to `.git`, `.agents` or `.rho`, and has no network beyond localhost.
@@ -67,6 +67,7 @@ The `rules.toml` and `mcp.toml` of earlier versions are moved into it on first s
 | --- | --- |
 | `~/.config/rho/config.toml` | Everything rho is configured with (below) |
 | `.rho/config.toml` | A project's `[rules]` (`ask` and `deny` only) and `[agents]` |
+| `~/.config/rho/agents/*.md`, `.rho/agents/*.md` | Subagents of your own, and the project's, for the `task` tool: frontmatter with `name`, `description` and optionally `tools` (`mcp__server__*` for a server's tools), `model` and `effort`, then what it should do. A later one replaces an earlier one of the same name, `explore` included. Each runs on the session's model unless it says, and stops after 50 steps with a report |
 | `.agents/skills`, `~/.config/rho/skills`, `~/.agents/skills` | Skills, one folder each with a `SKILL.md`: the project's (from the repository root down; a nearer one wins), then rho's, then those shared with other agents. A skill hides one of the same name below it, with a warning |
 | `~/.config/rho/AGENTS.md`, `AGENTS.md` | Instructions, with the project's from its root down |
 | `~/.local/share/rho/sessions/<directory>` | Sessions, one JSON-lines file each |
