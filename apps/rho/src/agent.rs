@@ -17,7 +17,7 @@ use manifatura::kit::{self, Approvals, Summarizer};
 use manifatura::policy::{Decision, Policy, Rules};
 use manifatura::providers::responses::Responses;
 use manifatura::sandbox::Sandbox;
-use manifatura::skills::{SkillSet, Skills, SystemPromptExt};
+use manifatura::skills::{AGENTS_DIR, SkillSet, Skills, SystemPromptExt};
 use manifatura::snapshots::Snapshots;
 use manifatura::store::JsonlStore;
 use manifatura::subagents::{Definition, Progress, Subagent, Subagents};
@@ -265,10 +265,9 @@ pub(crate) async fn prepare(
     let mut files = ContextFiles::new()
         .max_bytes(32 * 1024)
         .user_file(paths::config_dir().join("AGENTS.md"));
-    let mut skills = Skills::new();
+    let skills = skill_sources(home.as_deref().map(Path::new), &options.compat);
     if let Some(home) = &home {
         files = files.home(home);
-        skills = skills.home(home);
     }
     let files = files.load(&*env).await;
     let skills = skills.load(&*env).await;
@@ -377,6 +376,25 @@ fn overflow_seen(overflowed: &Overflowed) -> manifatura::Hooks {
             manifatura::hook::Recover::Fail
         }
     })
+}
+
+/// Where skills come from, a later source hiding an earlier one of the same name: other agents' folders when
+/// `compat` asks for them, `~/.agents/skills`, rho's own, then the project's `.agents/skills` from the repository
+/// root down to the working directory.
+fn skill_sources(home: Option<&Path>, compat: &[paths::Compat]) -> Skills {
+    let claude = compat.contains(&paths::Compat::Claude);
+    let mut skills = Skills::new();
+    if let Some(home) = home {
+        if claude {
+            skills = skills.dir(home.join(".claude/skills"));
+        }
+        skills = skills.dir(home.join(AGENTS_DIR)).home(home);
+    }
+    skills = skills.dir(paths::config_dir().join("skills"));
+    if claude {
+        skills = skills.project(".claude/skills");
+    }
+    skills.project(AGENTS_DIR)
 }
 
 /// The built-in subagents, for the `task` tool and `/explore`.
@@ -714,6 +732,40 @@ mod tests {
             (Some("b".to_string()), Some(Effort::High))
         );
         assert_eq!(recorded_choice(&[]), (None, None));
+    }
+
+    #[tokio::test]
+    async fn project_skills_hide_yours_and_claudes_are_read_when_asked() {
+        let home = std::env::temp_dir().join(format!("rho-skills-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let skill = |dir: PathBuf, name: &str, about: &str| {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+            std::fs::write(
+                dir.join(name).join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {about}\n---\nDo it.\n"),
+            )
+            .unwrap();
+        };
+        skill(home.join(".agents/skills"), "a", "Yours.");
+        skill(home.join(".claude/skills"), "b", "Claude's.");
+        let project = home.join("proj");
+        skill(project.join(".agents/skills"), "a", "The project's.");
+        let env = Local::new(&project).unwrap();
+
+        let found = skill_sources(Some(&home), &[]).load(&env).await;
+        let names: Vec<(&str, &str)> = found
+            .skills()
+            .iter()
+            .map(|s| (s.name.as_str(), s.description.as_str()))
+            .collect();
+        assert_eq!(names, [("a", "The project's.")]);
+        assert!(found.warnings().iter().any(|w| w.contains("hides")));
+
+        let found = skill_sources(Some(&home), &[paths::Compat::Claude])
+            .load(&env)
+            .await;
+        assert_eq!(found.skills().len(), 2);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

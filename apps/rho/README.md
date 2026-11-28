@@ -67,6 +67,7 @@ The `rules.toml` and `mcp.toml` of earlier versions are moved into it on first s
 | --- | --- |
 | `~/.config/rho/config.toml` | Everything rho is configured with (below) |
 | `.rho/config.toml` | A project's `[rules]` (`ask` and `deny` only) and `[agents]` |
+| `.agents/skills`, `~/.config/rho/skills`, `~/.agents/skills` | Skills, one folder each with a `SKILL.md`: the project's (from the repository root down; a nearer one wins), then rho's, then those shared with other agents. A skill hides one of the same name below it, with a warning |
 | `~/.config/rho/AGENTS.md`, `AGENTS.md` | Instructions, with the project's from its root down |
 | `~/.local/share/rho/sessions/<directory>` | Sessions, one JSON-lines file each |
 | `~/.local/share/rho/snapshots/<directory>.git` | The workspace as each turn found it |
