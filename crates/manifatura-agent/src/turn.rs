@@ -367,6 +367,10 @@ async fn stream(
                 ));
             }
             Some(StreamEvent::Done(r)) => return Some(r),
+            Some(StreamEvent::MessageStarted { phase }) => Event::MessageStarted {
+                turn: turn.into(),
+                phase,
+            },
             Some(StreamEvent::TextDelta(text)) => Event::TextDelta {
                 turn: turn.into(),
                 text,

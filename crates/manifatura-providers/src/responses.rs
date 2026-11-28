@@ -422,7 +422,9 @@ impl Responses {
                 }
                 // Each message item says what it is for; its text goes to a block of its own.
                 "response.output_item.added" if v["item"]["type"] == "message" => {
-                    acc.message(phase_of(&v["item"]["phase"]));
+                    let phase = phase_of(&v["item"]["phase"]);
+                    acc.message(phase);
+                    deltas.push(StreamEvent::MessageStarted { phase });
                 }
                 "response.output_item.done" if v["item"]["type"] == "reasoning" => {
                     if let Some(enc) = v["item"]["encrypted_content"].as_str() {

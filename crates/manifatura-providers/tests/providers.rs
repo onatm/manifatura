@@ -434,7 +434,23 @@ mod responses {
         )];
         let (mock, url) = Mock::start(vec![sse(chunks), sse(done)]).await;
         let p = Responses::new(format!("{url}/v1"));
-        let (_, r) = collect(&p, request()).await;
+        let (events, r) = collect(&p, request()).await;
+        // Each message's start is streamed with its phase, ahead of its text.
+        let starts: Vec<&StreamEvent> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::MessageStarted { .. }))
+            .collect();
+        assert_eq!(
+            starts,
+            [
+                &StreamEvent::MessageStarted {
+                    phase: Some(Phase::Commentary)
+                },
+                &StreamEvent::MessageStarted {
+                    phase: Some(Phase::FinalAnswer)
+                },
+            ]
+        );
         assert_eq!(
             r.message.content,
             [

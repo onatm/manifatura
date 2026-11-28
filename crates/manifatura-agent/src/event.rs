@@ -50,6 +50,16 @@ pub enum Event {
         /// Estimated context tokens after it.
         tokens_after: u64,
     },
+    /// A message of the answer began, a progress update or the final answer when the provider says which; its
+    /// text follows as [`Event::TextDelta`]s.
+    #[serde(rename = "message.started")]
+    MessageStarted {
+        /// The turn's id.
+        turn: String,
+        /// What the message is for, when known.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phase: Option<crate::Phase>,
+    },
     /// More of the answer's text, as it streams.
     #[serde(rename = "text.delta")]
     TextDelta {
@@ -136,6 +146,7 @@ impl Event {
             Event::TurnStarted { turn }
             | Event::StepStarted { turn, .. }
             | Event::Compacted { turn, .. }
+            | Event::MessageStarted { turn, .. }
             | Event::TextDelta { turn, .. }
             | Event::ReasoningDelta { turn, .. }
             | Event::MessageAppended { turn, .. }

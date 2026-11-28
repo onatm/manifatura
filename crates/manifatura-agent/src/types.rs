@@ -585,6 +585,12 @@ impl Response {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum StreamEvent {
+    /// A message of the answer began; its text follows as [`StreamEvent::TextDelta`]s. `phase` says what it is
+    /// for, when the provider says (OpenAI's Responses API does).
+    MessageStarted {
+        /// A progress update or the final answer.
+        phase: Option<Phase>,
+    },
     /// More of the answer's text.
     TextDelta(String),
     /// More of the model's reasoning.
