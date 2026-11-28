@@ -92,7 +92,8 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "the skills: who sees each; start one with /skill:name",
     ),
     ("/help", "", "what the keys and commands do"),
-    ("/exit", "", "quit"),
+    ("/exit", "", "quit rho"),
+    ("/quit", "", "quit rho"),
 ];
 const MAX_COMPLETIONS: usize = 8;
 /// The prompt that wakes the agent when a command it left in the background exits; the exec hook's note before
@@ -268,7 +269,7 @@ fn completions(
 
 /// Whether `name` is one of the chat's own commands, which come before a skill of the same name.
 fn is_command(name: &str) -> bool {
-    matches!(name, "/quit") || COMMANDS.iter().any(|(command, ..)| *command == name)
+    COMMANDS.iter().any(|(command, ..)| *command == name)
 }
 
 /// Runs the screen until the person quits. Returns the session to mention on the way out.
@@ -2286,6 +2287,7 @@ mod tests {
             ["/skills", "/skill:codebase-tour ", "/skill:status "]
         );
         assert_eq!(texts("/ex"), ["/exit", "/explore "]);
+        assert_eq!(texts("/qu"), ["/quit"]);
         assert_eq!(
             texts("/stat"),
             ["/status"],
