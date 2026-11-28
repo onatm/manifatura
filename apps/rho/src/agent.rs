@@ -14,7 +14,7 @@ use manifatura::auth::openai::{Model, SignIn};
 use manifatura::exec::Exec;
 use manifatura::kit::context::{ContextFiles, SystemPrompt};
 use manifatura::kit::{self, Approvals, Summarizer};
-use manifatura::policy::{Decision, Policy};
+use manifatura::policy::{Decision, Policy, Rules};
 use manifatura::providers::responses::Responses;
 use manifatura::sandbox::Sandbox;
 use manifatura::skills::{SkillSet, Skills, SystemPromptExt};
@@ -80,6 +80,12 @@ pub(crate) struct ChatOptions {
     pub(crate) mouse: bool,
     /// The context window compaction measures against, instead of the model's own.
     pub(crate) context_window: Option<u32>,
+    /// Your rules, other agents' folders to read, and settings for subagents, from `config.toml`.
+    pub(crate) rules: Rules,
+    pub(crate) compat: Vec<paths::Compat>,
+    pub(crate) agents: std::collections::BTreeMap<String, paths::AgentConfig>,
+    /// What starting up changed, such as old config files folded into `config.toml`, for the screen.
+    pub(crate) notices: Vec<String>,
 }
 
 /// The agent and its session, set up once rho is connected.
@@ -114,7 +120,8 @@ pub(crate) struct Prepared {
     pub(crate) exec: Exec,
     pub(crate) policy: Policy,
     /// Where remembered rules are saved.
-    pub(crate) rules_path: PathBuf,
+    /// Your `config.toml`, where "always allow" writes.
+    pub(crate) config_path: PathBuf,
     /// The models the plan offers, and the one in use.
     pub(crate) models: Vec<Model>,
     pub(crate) model: String,
@@ -139,7 +146,7 @@ pub(crate) async fn prepare(
     let Some(account) = sign_in.account() else {
         bail!("not signed in: run `rho login`");
     };
-    let mut problems = Vec::new();
+    let mut problems = options.notices.clone();
     let servers_starting = tokio::spawn(crate::mcp::start(mcp));
     let models = sign_in
         .models()
@@ -277,8 +284,15 @@ pub(crate) async fn prepare(
 
     // rho's own repository, outside the workspace: git writes there unsandboxed, which only rho asks for.
     let snapshots = Snapshots::new(paths::snapshots_dir(&cwd)).unsandboxed(true);
-    let rules_path = paths::rules_path();
-    let policy = policy(&cwd, &rules_path, &exec, &mut problems)?;
+    let config_path = paths::config_path();
+    let project = paths::project_config(&cwd)?;
+    let policy = policy(
+        &options.rules,
+        project.rules.clone(),
+        &config_path,
+        &exec,
+        &mut problems,
+    )?;
     let approvals = Approvals::new();
     let summarizer = Arc::new(Summarizer::default());
     let overflowed = Overflowed::default();
@@ -340,7 +354,7 @@ pub(crate) async fn prepare(
         approvals,
         exec,
         policy,
-        rules_path,
+        config_path,
         models,
         model,
         effort,
@@ -380,29 +394,28 @@ fn subagents() -> Result<Subagents> {
 /// What asks and what may run: your rules, the project's (which may only ask and deny: a repository must not let
 /// commands out of the sandbox), then rho's defaults.
 fn policy(
-    cwd: &Path,
-    rules_path: &Path,
+    user: &Rules,
+    mut project: Rules,
+    config_path: &Path,
     exec: &Exec,
     problems: &mut Vec<String>,
 ) -> Result<Policy> {
-    let mut policy = Policy::new();
-    if let Some(rules) = paths::read_rules(rules_path)? {
-        policy = policy.rules(&rules).map_err(anyhow::Error::msg)?;
+    let mut policy = Policy::new()
+        .rules(user)
+        .map_err(|e| anyhow::anyhow!("[rules] in {}: {e}", config_path.display()))?;
+    if !project.allow.is_empty() {
+        problems.push(format!(
+            "{} allows {}: a project's rules may only ask and deny, so these were left out; add them under [rules] \
+             in {} to allow them",
+            paths::PROJECT_CONFIG,
+            project.allow.join(", "),
+            config_path.display()
+        ));
+        project.allow.clear();
     }
-    let project = cwd.join(paths::PROJECT_RULES);
-    if let Some(mut rules) = paths::read_rules(&project)? {
-        if !rules.allow.is_empty() {
-            problems.push(format!(
-                "{} allows {}: a project's rules may only ask and deny, so these were left out; add them to {} \
-                 to allow them",
-                paths::PROJECT_RULES,
-                rules.allow.join(", "),
-                rules_path.display()
-            ));
-            rules.allow.clear();
-        }
-        policy = policy.rules(&rules).map_err(anyhow::Error::msg)?;
-    }
+    policy = policy
+        .rules(&project)
+        .map_err(|e| anyhow::anyhow!("[rules] in {}: {e}", paths::PROJECT_CONFIG))?;
     let typing = exec.clone();
     let mut policy = policy
         .when(
@@ -416,7 +429,7 @@ fn policy(
     for tool in ALLOWED {
         policy = policy.tool_default(*tool, Decision::Allow);
     }
-    let save = rules_path.to_path_buf();
+    let save = config_path.to_path_buf();
     Ok(policy.default(Decision::Ask).on_remember(move |rule| {
         if let Err(error) = paths::remember(&save, rule) {
             tracing::warn!("could not save the rule {rule}: {error:#}");
@@ -582,13 +595,20 @@ mod tests {
     fn the_policy_asks_only_to_leave_the_sandbox_and_for_other_tools() {
         let dir = std::env::temp_dir().join(format!("rho-policy-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".rho")).unwrap();
-        std::fs::write(
-            dir.join(paths::PROJECT_RULES),
-            "allow = [\"exec_command(curl)\"]\ndeny = [\"exec_command(git push)\"]\n",
+        let project = Rules {
+            allow: vec!["exec_command(curl)".into()],
+            deny: vec!["exec_command(git push)".into()],
+            ..Rules::default()
+        };
+        let mut problems = Vec::new();
+        let policy = policy(
+            &Rules::default(),
+            project,
+            &dir.join("config.toml"),
+            &Exec::new(),
+            &mut problems,
         )
         .unwrap();
-        let mut problems = Vec::new();
-        let policy = policy(&dir, &dir.join("none.toml"), &Exec::new(), &mut problems).unwrap();
         let s = SessionId::from("s");
         let decide = |c: &ToolCall| policy.decide(c, &s).decision;
         assert_eq!(

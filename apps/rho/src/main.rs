@@ -128,6 +128,7 @@ fn chat(cli: Cli, runtime: tokio::runtime::Runtime) -> Result<()> {
         println!("rho runs on your ChatGPT plan; sign in first.");
         runtime.block_on(login())?;
     }
+    let notices = paths::migrate(&cwd);
     let config = paths::config()?;
     let parse = |e: Option<String>| {
         e.map(|e| agent::parse_effort(&e))
@@ -144,8 +145,12 @@ fn chat(cli: Cli, runtime: tokio::runtime::Runtime) -> Result<()> {
         logs: cli.logs,
         mouse: config.mouse.unwrap_or(false),
         context_window: config.context_window,
+        rules: config.rules,
+        compat: config.compat,
+        agents: config.agents,
+        notices,
     };
-    let mcp = mcp::configured(&paths::config_dir().join("mcp.toml"))?;
+    let mcp: Vec<_> = config.mcp.into_iter().collect();
     let (sink, mut logs) = ui::logs::channel();
     start_logging(cli.logs, sink);
     let start = ui::Start {

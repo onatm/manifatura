@@ -1186,8 +1186,9 @@ impl App {
             self.view.notice(
                 Level::Info,
                 format!(
-                    "allow, ask and deny rules: {} (yours) and .rho/rules.toml (the project's: ask and deny only)",
-                    ready.rules_path.display()
+                    "rules: [rules] in {} (yours) and in {} (the project's: ask and deny only)",
+                    ready.config_path.display(),
+                    crate::paths::PROJECT_CONFIG
                 ),
             );
             return;
@@ -1369,10 +1370,12 @@ impl App {
             "/explore" => self.explore(argument, line),
             "/mcp" => {
                 if ready.servers.is_empty() {
-                    let path = crate::paths::config_dir().join("mcp.toml");
                     self.view.notice(
                         Level::Info,
-                        format!("no MCP servers; add them to {}", path.display()),
+                        format!(
+                            "no MCP servers; add them under [mcp] in {}",
+                            ready.config_path.display()
+                        ),
                     );
                 }
                 for (name, tools, eager) in &ready.servers {
@@ -1743,6 +1746,10 @@ mod tests {
             effort: Some(Effort::High),
             default_model: None,
             default_effort: None,
+            rules: Default::default(),
+            compat: Vec::new(),
+            agents: Default::default(),
+            notices: Vec::new(),
             logs: false,
             mouse: false,
             context_window: None,

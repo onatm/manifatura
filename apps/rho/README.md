@@ -36,14 +36,37 @@ cargo run -p rho -- models           # the models your plan offers
   conversation, or both. A conversation that goes back leaves the screen at that message, with the message back in
   the composer to edit.
 
+## Configuration
+
+One file, `$XDG_CONFIG_HOME/rho/config.toml` (else `~/.config/rho/config.toml`):
+
+```toml
+model = "gpt-6.2-sol"     # new sessions start on it; `rho models` lists the plan's
+effort = "medium"         # and on this effort, when the model has it
+mouse = false             # clicks on the footer and task list; the scroll wheel then goes to rho
+compat = ["claude"]       # also read .claude/skills and ~/.claude/skills
+
+[rules]                   # "always allow" adds here
+allow = ["exec_command(cargo test)", "mcp__exa__*"]
+deny = ["exec_command(git push)"]
+
+[mcp.exa]                 # a server: `url` (streamable HTTP) or `command` and `args` (stdio)
+url = "https://mcp.exa.ai/mcp"
+eager = true              # its tools offered directly, not through find_tools
+
+[agents.explore]          # over what an agent's file says: tools, mcp, model, effort
+effort = "low"
+mcp = ["exa"]
+```
+
+The `rules.toml` and `mcp.toml` of earlier versions are moved into it on first start, and kept as `.bak`.
+
 ## Files
 
 | Path | What |
 | --- | --- |
-| `~/.config/rho/config.toml` | `model` and `effort`, the defaults for new sessions (the efforts each model has: `rho models`), `context_window`, `mouse` (clicks on the footer and the task list; the scroll wheel then goes to rho, not the scrollback) |
-| `~/.config/rho/rules.toml` | `allow`, `ask` and `deny` rules, such as `exec_command(npm install)` or `mcp__exa__*` |
-| `.rho/rules.toml` | A project's rules: `ask` and `deny` only |
-| `~/.config/rho/mcp.toml` | MCP servers (`[servers.<name>]` with `url` or `command`) |
+| `~/.config/rho/config.toml` | Everything rho is configured with (below) |
+| `.rho/config.toml` | A project's `[rules]` (`ask` and `deny` only) and `[agents]` |
 | `~/.config/rho/AGENTS.md`, `AGENTS.md` | Instructions, with the project's from its root down |
 | `~/.local/share/rho/sessions/<directory>` | Sessions, one JSON-lines file each |
 | `~/.local/share/rho/snapshots/<directory>.git` | The workspace as each turn found it |
