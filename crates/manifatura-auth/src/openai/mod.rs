@@ -120,6 +120,21 @@ pub struct Model {
     pub efforts: Vec<(Effort, String)>,
 }
 
+impl Model {
+    /// A model known only by its id, for tests and apps that list models of their own; set the
+    /// catalog's fields after.
+    pub fn new(slug: impl Into<String>) -> Self {
+        let slug = slug.into();
+        Self {
+            display_name: slug.clone(),
+            slug,
+            context_window: None,
+            default_effort: None,
+            efforts: Vec::new(),
+        }
+    }
+}
+
 /// Sign in with ChatGPT for one app. Cheap to clone.
 #[derive(Clone, Debug)]
 pub struct SignIn {

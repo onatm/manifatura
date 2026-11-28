@@ -66,10 +66,14 @@ pub(crate) struct ChatOptions {
     pub(crate) resume_latest: bool,
     /// Open this session.
     pub(crate) resume: Option<String>,
-    /// The model to start with; the plan's first otherwise.
+    /// The model chosen for this run (`--model`), which the session then keeps.
     pub(crate) model: Option<String>,
-    /// How much the model reasons; the model's default otherwise.
+    /// The effort chosen for this run (`--effort`), which the session then keeps.
     pub(crate) effort: Option<Effort>,
+    /// For a session that has not chosen: the config's model (else the plan's first) and effort (else the
+    /// model's own default).
+    pub(crate) default_model: Option<String>,
+    pub(crate) default_effort: Option<Effort>,
     /// Keep the log, behind a button on the screen.
     pub(crate) logs: bool,
     /// Take the mouse for clicks, which also takes the scroll wheel from the terminal.
@@ -141,32 +145,77 @@ pub(crate) async fn prepare(
         .models()
         .await
         .context("listing the models of your ChatGPT plan")?;
-    let model = match options.model.clone() {
-        Some(model) => {
-            if !models.iter().any(|m| m.slug == model) {
+    // The session to open, and what it last chose: a session keeps its model and effort, whatever the defaults
+    // are now, until one is chosen for it (a flag, /model, /effort).
+    let known = recent_sessions(store.as_ref()).await?;
+    let id = match (&options.resume, options.resume_latest) {
+        (Some(id), _) => {
+            let id = SessionId::from(id.as_str());
+            if !known.iter().any(|s| s.id == id) {
+                bail!(
+                    "no session {} in this directory; `rho --resume` lists them",
+                    id.as_str()
+                );
+            }
+            id
+        }
+        (_, true) => known
+            .iter()
+            .max_by_key(|s| s.updated)
+            .map_or_else(SessionId::new, |latest| latest.id.clone()),
+        _ => SessionId::new(),
+    };
+    // A new session is only written once it is used, so starting rho and quitting leaves nothing behind.
+    let existed = known.iter().any(|s| s.id == id);
+    let (recorded_model, recorded_effort) = if existed {
+        recorded_choice(&store.load(&id).await?)
+    } else {
+        (None, None)
+    };
+    let default_model = match &options.default_model {
+        Some(model) if models.iter().any(|m| &m.slug == model) => model.clone(),
+        other => {
+            if let Some(model) = other {
+                problems.push(format!(
+                    "your plan does not list the model {model} in your config; `rho models` lists those it does"
+                ));
+            }
+            models
+                .first()
+                .map(|m| m.slug.clone())
+                .context("your ChatGPT plan lists no models")?
+        }
+    };
+    let model = match (&options.model, recorded_model) {
+        (Some(model), _) => {
+            if !models.iter().any(|m| &m.slug == model) {
                 problems.push(format!(
                     "your plan does not list the model {model}; `rho models` lists those it does"
                 ));
             }
-            model
+            model.clone()
         }
-        None => models
-            .first()
-            .map(|m| m.slug.clone())
-            .context("your ChatGPT plan lists no models")?,
-    };
-    let listed = models.iter().find(|m| m.slug == model);
-    let effort = match (options.effort, listed) {
-        (Some(e), Some(m)) if !m.efforts.is_empty() && !m.efforts.iter().any(|(x, _)| *x == e) => {
+        (None, Some(model)) if models.iter().any(|m| m.slug == model) => model,
+        (None, Some(model)) => {
             problems.push(format!(
-                "{model} has no {} effort; it uses its default",
-                effort_label(Some(e))
+                "this session's model, {model}, is no longer on your plan; it continues on {default_model}"
             ));
-            m.default_effort
+            default_model
         }
-        (Some(e), _) => Some(e),
-        (None, m) => m.and_then(|m| m.default_effort),
+        (None, None) => default_model,
     };
+    let effort = fit_effort(
+        &models,
+        &model,
+        &[options.effort, recorded_effort, options.default_effort],
+    );
+    if let Some(wanted) = options.effort.filter(|e| Some(*e) != effort) {
+        problems.push(format!(
+            "{model} has no {} effort; it uses {}",
+            effort_label(Some(wanted)),
+            effort_label(effort)
+        ));
+    }
 
     let local = Local::new(&cwd)?;
     let env = Arc::new(
@@ -266,26 +315,6 @@ pub(crate) async fn prepare(
         .store(store.clone())
         .env(env.clone())
         .build();
-    let known = recent_sessions(store.as_ref()).await?;
-    let id = match (&options.resume, options.resume_latest) {
-        (Some(id), _) => {
-            let id = SessionId::from(id.as_str());
-            if !known.iter().any(|s| s.id == id) {
-                bail!(
-                    "no session {} in this directory; `rho --resume` lists them",
-                    id.as_str()
-                );
-            }
-            id
-        }
-        (_, true) => known
-            .iter()
-            .max_by_key(|s| s.updated)
-            .map_or_else(SessionId::new, |latest| latest.id.clone()),
-        _ => SessionId::new(),
-    };
-    // A new session is only written once it is used, so starting rho and quitting leaves nothing behind.
-    let existed = known.iter().any(|s| s.id == id);
     let session = runtime.session(&agent, id);
     let history = if existed {
         session.history().await?
@@ -434,6 +463,48 @@ impl Provider for Catalog {
     }
 }
 
+/// The model and effort a session last recorded, from its entries.
+fn recorded_choice(entries: &[manifatura::Entry]) -> (Option<String>, Option<Effort>) {
+    let (mut model, mut effort) = (None, None);
+    for entry in entries {
+        if let manifatura::Record::ModelChange {
+            model: m,
+            reasoning: r,
+        } = &entry.record
+        {
+            model = m.clone().or(model);
+            effort = r.or(effort);
+        }
+    }
+    (model, effort)
+}
+
+/// The first of `wanted` that `model` offers, else the model's own default.
+pub(crate) fn fit_effort(
+    models: &[Model],
+    model: &str,
+    wanted: &[Option<Effort>],
+) -> Option<Effort> {
+    let listed = models.iter().find(|m| m.slug == model);
+    let offered = |e: &Effort| {
+        listed.is_none_or(|m| m.efforts.is_empty() || m.efforts.iter().any(|(x, _)| x == e))
+    };
+    wanted
+        .iter()
+        .flatten()
+        .find(|e| offered(e))
+        .copied()
+        .or_else(|| default_effort(models, model))
+}
+
+/// The effort `model` uses when none is chosen, from the plan's catalog.
+pub(crate) fn default_effort(models: &[Model], model: &str) -> Option<Effort> {
+    models
+        .iter()
+        .find(|m| m.slug == model)
+        .and_then(|m| m.default_effort)
+}
+
 /// Reads an effort: `off`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`.
 pub(crate) fn parse_effort(text: &str) -> Result<Effort, String> {
     Effort::parse(text).ok_or_else(|| {
@@ -570,6 +641,59 @@ mod tests {
             "{}",
             tool.spec().description
         );
+    }
+
+    fn model(slug: &str, default: Option<Effort>, efforts: &[Effort]) -> Model {
+        let mut m = Model::new(slug);
+        m.default_effort = default;
+        m.efforts = efforts.iter().map(|e| (*e, String::new())).collect();
+        m
+    }
+
+    #[test]
+    fn an_effort_the_model_lacks_falls_through_to_the_next_then_its_default() {
+        let models = [
+            model("a", Some(Effort::Medium), &[Effort::Low, Effort::Medium]),
+            model("b", Some(Effort::High), &[Effort::High, Effort::XHigh]),
+        ];
+        let fit = |model, wanted: &[Option<Effort>]| fit_effort(&models, model, wanted);
+        // A flag, then what the session recorded, then the config's default.
+        assert_eq!(
+            fit("a", &[Some(Effort::Low), Some(Effort::Medium)]),
+            Some(Effort::Low)
+        );
+        assert_eq!(
+            fit("a", &[None, Some(Effort::XHigh), Some(Effort::Low)]),
+            Some(Effort::Low)
+        );
+        assert_eq!(fit("b", &[Some(Effort::Low), None]), Some(Effort::High));
+        assert_eq!(fit("b", &[]), Some(Effort::High));
+        // A model the catalog does not know takes what is asked.
+        assert_eq!(fit("c", &[Some(Effort::Max)]), Some(Effort::Max));
+        assert_eq!(default_effort(&models, "c"), None);
+    }
+
+    #[test]
+    fn the_last_choice_recorded_is_the_sessions() {
+        let change = |model: Option<&str>, reasoning| {
+            manifatura::Entry::new(
+                None,
+                manifatura::Record::ModelChange {
+                    model: model.map(str::to_string),
+                    reasoning,
+                },
+            )
+        };
+        let entries = [
+            change(Some("a"), Some(Effort::Low)),
+            change(Some("b"), None),
+            change(None, Some(Effort::High)),
+        ];
+        assert_eq!(
+            recorded_choice(&entries),
+            (Some("b".to_string()), Some(Effort::High))
+        );
+        assert_eq!(recorded_choice(&[]), (None, None));
     }
 
     #[test]

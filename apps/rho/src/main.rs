@@ -129,17 +129,18 @@ fn chat(cli: Cli, runtime: tokio::runtime::Runtime) -> Result<()> {
         runtime.block_on(login())?;
     }
     let config = paths::config()?;
-    let effort = cli
-        .effort
-        .or(config.effort)
-        .map(|e| agent::parse_effort(&e))
-        .transpose()
-        .map_err(anyhow::Error::msg)?;
+    let parse = |e: Option<String>| {
+        e.map(|e| agent::parse_effort(&e))
+            .transpose()
+            .map_err(anyhow::Error::msg)
+    };
     let options = ChatOptions {
         resume_latest: cli.r#continue,
         resume: cli.resume.flatten(),
-        model: cli.model.or(config.model),
-        effort,
+        model: cli.model,
+        effort: parse(cli.effort)?,
+        default_model: config.model,
+        default_effort: parse(config.effort)?,
         logs: cli.logs,
         mouse: config.mouse.unwrap_or(false),
         context_window: config.context_window,

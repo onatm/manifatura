@@ -1271,3 +1271,37 @@ async fn what_is_recorded_so_far_is_read_while_a_turn_runs() {
         .collect();
     assert_eq!(texts.last().unwrap(), "done");
 }
+
+#[tokio::test]
+async fn the_status_tells_what_the_session_recorded_from_what_it_inherits() {
+    let p = ScriptedProvider::new().text("one").text("two");
+    let store = mem();
+    let rt = runtime(&p, store.clone());
+    let agent = Agent::new("x").model("m").reasoning(Effort::Low);
+    let s = rt.session(&agent, SessionId::new());
+    s.prompt("a").await.unwrap().wait().await.unwrap();
+    let status = s.status();
+    assert_eq!(status.model.as_deref(), Some("m"));
+    assert_eq!(status.reasoning, Some(Effort::Low));
+    assert_eq!(
+        (status.session_model, status.session_reasoning),
+        (None, None)
+    );
+
+    s.set_model("n").await.unwrap();
+    s.set_reasoning(Effort::High).await.unwrap();
+    // Resumed elsewhere, the session's own choice is what it reports and uses.
+    let other = runtime(&p, store);
+    let again = other.session(&agent, s.id().clone());
+    again.history().await.unwrap();
+    let status = again.status();
+    assert_eq!(status.session_model.as_deref(), Some("n"));
+    assert_eq!(status.session_reasoning, Some(Effort::High));
+    assert_eq!(status.model.as_deref(), Some("n"));
+    again.prompt("b").await.unwrap().wait().await.unwrap();
+    let last = p.requests().last().unwrap().clone();
+    assert_eq!(
+        (last.model.as_str(), last.reasoning),
+        ("n", Some(Effort::High))
+    );
+}

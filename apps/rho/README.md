@@ -28,6 +28,9 @@ cargo run -p rho -- models           # the models your plan offers
   one's; older ones become a one-line stub it can act on by calling the tool again. A long turn drops its own oldest
   results in batches past 70% of the window. Only past 85% is a summary written, and when the model still finds the
   request too long, the turn ends with your message back in the composer and the footer's context share in red.
+- **Model and effort**: a session keeps the model and effort it last ran on, whatever your defaults become, until
+  you choose others for it (`--model`, `--effort`, `/model`, `/effort`; `/effort default` is the model's own level).
+  A new session starts on your config's `model` and `effort`, else the plan's first model at its default level.
 - **Rewind**: as each turn starts, rho snapshots the workspace (what `.gitignore` leaves out is left out) in a git
   repository of its own, never your `.git`. `/rewind` goes back to before one of your messages: the code, the
   conversation, or both. A conversation that goes back leaves the screen at that message, with the message back in
@@ -37,7 +40,7 @@ cargo run -p rho -- models           # the models your plan offers
 
 | Path | What |
 | --- | --- |
-| `~/.config/rho/config.toml` | `model`, `effort` (off, low, medium, high), `context_window`, `mouse` (clicks on the footer and the task list; the scroll wheel then goes to rho, not the scrollback) |
+| `~/.config/rho/config.toml` | `model` and `effort`, the defaults for new sessions (the efforts each model has: `rho models`), `context_window`, `mouse` (clicks on the footer and the task list; the scroll wheel then goes to rho, not the scrollback) |
 | `~/.config/rho/rules.toml` | `allow`, `ask` and `deny` rules, such as `exec_command(npm install)` or `mcp__exa__*` |
 | `.rho/rules.toml` | A project's rules: `ask` and `deny` only |
 | `~/.config/rho/mcp.toml` | MCP servers (`[servers.<name>]` with `url` or `command`) |

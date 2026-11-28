@@ -42,7 +42,8 @@ use self::screen::ChatScreen;
 use self::tasks::{Action, Child, Tasks};
 use self::view::{Activity, Item, Level, View, dim, explore_message, tokens, typed};
 use crate::agent::{
-    ChatOptions, Prepared, ago, effort_label, efforts, parse_effort, recent_sessions,
+    ChatOptions, Prepared, ago, default_effort, effort_label, efforts, fit_effort, parse_effort,
+    recent_sessions,
 };
 
 const SPINNER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
@@ -177,7 +178,7 @@ fn completions(
     line: &str,
     sessions: &[SessionMeta],
     skills: &[Skill],
-    levels: &[(Effort, String)],
+    levels: &[(String, String)],
 ) -> Vec<Completion> {
     if !line.starts_with('/') {
         return Vec::new();
@@ -186,11 +187,10 @@ fn completions(
         let partial = partial.trim().to_lowercase();
         return levels
             .iter()
-            .map(|(effort, about)| (effort_label(Some(*effort)), about))
             .filter(|(level, _)| level.starts_with(&partial) && *level != partial)
             .map(|(level, about)| Completion {
                 text: format!("/effort {level}"),
-                label: level,
+                label: level.clone(),
                 about: about.clone(),
                 runs: true,
             })
@@ -1016,8 +1016,7 @@ impl App {
                     .ready
                     .as_ref()
                     .map_or(&[][..], |ready| ready.skills.skills());
-                let levels = self.efforts();
-                completions(line, &self.sessions, skills, &levels)
+                completions(line, &self.sessions, skills, &self.effort_choices())
             }
             _ => Vec::new(),
         }
@@ -1103,6 +1102,7 @@ impl App {
 
     /// Starts a turn for `text`, which the transcript already shows.
     async fn prompt(&mut self, text: String) {
+        self.pin().await;
         let Some(ready) = &self.ready else { return };
         match ready.session.prompt(text).await {
             Ok(turn) => {
@@ -1261,20 +1261,12 @@ impl App {
                             self.model = argument.to_owned();
                             self.view.notice(Level::Info, format!("model {argument}"));
                             // An effort the new model does not have becomes its default.
-                            let levels = efforts(&ready.models, argument);
-                            let kept = self
-                                .effort
-                                .is_none_or(|e| levels.iter().any(|(l, _)| *l == e));
-                            let default = ready
-                                .models
-                                .iter()
-                                .find(|m| m.slug == argument)
-                                .and_then(|m| m.default_effort);
-                            if !kept
-                                && let Some(default) = default
-                                && ready.session.set_reasoning(default).await.is_ok()
+                            let effort = fit_effort(&ready.models, argument, &[self.effort]);
+                            if effort != self.effort
+                                && let Some(effort) = effort
+                                && ready.session.set_reasoning(effort).await.is_ok()
                             {
-                                self.effort = Some(default);
+                                self.effort = Some(effort);
                                 self.view.notice(
                                     Level::Info,
                                     format!(
@@ -1305,6 +1297,33 @@ impl App {
                         Level::Info,
                         format!("{mark}{:<8}{about}", effort_label(Some(effort))),
                     );
+                }
+            }
+            "/effort" if argument == "default" => {
+                match default_effort(&ready.models, &self.model) {
+                    None => self.view.notice(
+                        Level::Warn,
+                        format!(
+                            "{} has no default effort in your plan's catalog",
+                            self.model
+                        ),
+                    ),
+                    Some(effort) => match ready.session.set_reasoning(effort).await {
+                        Ok(()) => {
+                            self.effort = Some(effort);
+                            self.view.notice(
+                                Level::Info,
+                                format!(
+                                    "effort {}, {}'s default",
+                                    effort_label(self.effort),
+                                    self.model
+                                ),
+                            );
+                        }
+                        Err(error) => self
+                            .view
+                            .notice(Level::Error, format!("could not set the effort: {error}")),
+                    },
                 }
             }
             "/effort" => match parse_effort(argument) {
@@ -1580,12 +1599,36 @@ impl App {
                         history.len()
                     ),
                 );
+                self.adopt_choice(&session);
                 self.switch(session);
             }
             Err(error) => self
                 .view
                 .notice(Level::Error, format!("Could not resume session: {error}")),
         }
+    }
+
+    /// Takes on the model and effort a resumed session last chose; one that chose none keeps the current ones,
+    /// which it records with its next turn.
+    fn adopt_choice(&mut self, session: &Session) {
+        let Some(ready) = &self.ready else { return };
+        let status = session.status();
+        match status.session_model {
+            Some(model) if ready.models.iter().any(|m| m.slug == model) => self.model = model,
+            Some(model) => self.view.notice(
+                Level::Warn,
+                format!(
+                    "this session's model, {model}, is no longer on your plan; it continues on {}",
+                    self.model
+                ),
+            ),
+            None => {}
+        }
+        self.effort = fit_effort(
+            &ready.models,
+            &self.model,
+            &[status.session_reasoning, self.effort],
+        );
     }
 
     fn switch(&mut self, session: Session) {
@@ -1608,6 +1651,51 @@ impl App {
 
     fn effort_label(&self) -> String {
         effort_label(self.effort)
+    }
+
+    /// The model's default effort, from the plan's catalog.
+    fn default_effort(&self) -> Option<Effort> {
+        self.ready
+            .as_ref()
+            .and_then(|ready| default_effort(&ready.models, &self.model))
+    }
+
+    /// What `/effort` completes to: `default` (naming the level it is), then the model's levels.
+    fn effort_choices(&self) -> Vec<(String, String)> {
+        let default = self.default_effort().map(|effort| {
+            (
+                "default".to_owned(),
+                format!("the model's default: {}", effort_label(Some(effort))),
+            )
+        });
+        default
+            .into_iter()
+            .chain(
+                self.efforts()
+                    .into_iter()
+                    .map(|(effort, about)| (effort_label(Some(effort)), about)),
+            )
+            .collect()
+    }
+
+    /// Records in the session the model and effort it runs on, when it has not recorded them yet or they changed
+    /// (a flag, a model no longer on the plan), so it keeps them whatever the defaults are later.
+    async fn pin(&mut self) {
+        let Some(ready) = &self.ready else { return };
+        let status = ready.session.status();
+        if status.session_model.as_deref() != Some(self.model.as_str())
+            && let Err(error) = ready.session.set_model(self.model.clone()).await
+        {
+            self.view
+                .notice(Level::Warn, format!("could not record the model: {error}"));
+        }
+        if let Some(effort) = self.effort
+            && status.session_reasoning != Some(effort)
+            && let Err(error) = ready.session.set_reasoning(effort).await
+        {
+            self.view
+                .notice(Level::Warn, format!("could not record the effort: {error}"));
+        }
     }
 
     fn status(&self) -> String {
@@ -1653,6 +1741,8 @@ mod tests {
             resume: None,
             model: Some("gpt-test".into()),
             effort: Some(Effort::High),
+            default_model: None,
+            default_effort: None,
             logs: false,
             mouse: false,
             context_window: None,
@@ -2019,7 +2109,12 @@ mod tests {
             agent: None,
         });
         let names = |line: &str| -> Vec<String> {
-            completions(line, &sessions, &[], &efforts(&[], "m"))
+            let levels: Vec<(String, String)> = efforts(&[], "m")
+                .into_iter()
+                .map(|(e, about)| (effort_label(Some(e)), about))
+                .chain([("default".into(), String::new())])
+                .collect();
+            completions(line, &sessions, &[], &levels)
                 .into_iter()
                 .map(|c| c.text)
                 .collect()

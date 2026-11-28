@@ -287,11 +287,18 @@ impl Provider for NoProvider {
 
 /// A snapshot of a session for status lines.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct SessionStatus {
     /// The model in use, after the session's own changes.
     pub model: Option<String>,
     /// The reasoning effort in use, if any is set.
     pub reasoning: Option<Effort>,
+    /// The model the session itself last recorded ([`Session::set_model`]); `None` when it uses
+    /// the agent's or the runtime's.
+    pub session_model: Option<String>,
+    /// The effort the session itself last recorded ([`Session::set_reasoning`]); `None` when it
+    /// uses the agent's.
+    pub session_reasoning: Option<Effort>,
     /// The session's label, if it has one.
     pub label: Option<String>,
     /// Estimated input tokens of the current context.
@@ -385,6 +392,8 @@ impl Shared {
         s.context_window = model.as_deref().and_then(|m| self.window(m));
         s.model = model;
         s.reasoning = live.reasoning.or(self.agent.reasoning);
+        s.session_model = live.model.clone();
+        s.session_reasoning = live.reasoning;
         s.label = live.label.clone();
         s.context_tokens = live.estimate(prompt_tokens(&self.agent.instructions, &[]));
     }
