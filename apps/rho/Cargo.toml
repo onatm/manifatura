@@ -23,6 +23,7 @@ ratatui-textarea = "0.9.4"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+strip-ansi-escapes = "0.2.1"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 toml = { version = "1.1.8", default-features = false, features = ["parse", "display", "serde", "std"] }
 tracing = "0.1.44"

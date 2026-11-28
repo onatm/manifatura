@@ -8,10 +8,11 @@ mod layout;
 pub(crate) mod logs;
 mod rewind;
 mod screen;
+mod tasks;
 mod text;
 mod view;
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +28,7 @@ use crossterm::{execute, terminal};
 use manifatura::exec::ExecEvent;
 use manifatura::kit::{Answer, ApprovalEvent};
 use manifatura::skills::Skill;
+use manifatura::subagents::Progress;
 use manifatura::{Abort, Effort, Event, Session, SessionId, SessionMeta};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -37,6 +39,7 @@ use self::approval::Ask;
 use self::logs::{LogLine, Logs};
 use self::rewind::{Outcome, Point, Restore, Rewind};
 use self::screen::ChatScreen;
+use self::tasks::{Action, Child, Tasks};
 use self::view::{Activity, Item, Level, View, dim, explore_message, tokens, typed};
 use crate::agent::{
     ChatOptions, Prepared, ago, effort_label, efforts, parse_effort, recent_sessions,
@@ -70,7 +73,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "[level]",
         "how much the model reasons, from the levels it has",
     ),
-    ("/ps", "", "the commands running in the background"),
+    (
+        "/tasks",
+        "",
+        "the background commands and subagents: their output, their transcripts",
+    ),
     ("/kill", "<id>", "stop a background command"),
     ("/rules", "", "the approval rules and where they are kept"),
     ("/status", "", "model, session, sandbox and plan"),
@@ -152,6 +159,18 @@ struct App {
     exploring: Option<(String, mpsc::UnboundedReceiver<Explored>)>,
     /// The session IDs of commands left running in the background.
     background: BTreeSet<u32>,
+    /// The subagents this session started, oldest first, and what each running one does.
+    children: Vec<Child>,
+    progress: Option<mpsc::UnboundedReceiver<Progress>>,
+    /// What each task call asked, by call id, until its subagent shows up.
+    asked: HashMap<String, String>,
+    /// The subagent shown instead of this session, and this session's screen meanwhile.
+    viewing: Option<usize>,
+    stashed: Option<View>,
+    /// The task panel, while it is open; its rows' screen lines, and the footer's tasks label, for clicks.
+    tasks: Option<Tasks>,
+    task_rows: Vec<(u16, usize)>,
+    tasks_button: Option<Rect>,
     /// The context the last model call started with, and the window.
     context: Option<(u64, Option<u32>)>,
     model: String,
@@ -245,7 +264,7 @@ pub(crate) async fn run(start: Start, logs: &mut Logs) -> (Option<SessionId>, Re
     let _ = execute!(out, EnableBracketedPaste);
     // Clicks reach the screen only with the mouse captured, which also takes the scroll wheel from the terminal:
     // only when there is a log to open.
-    let mouse = start.options.logs;
+    let mouse = start.options.logs || start.options.mouse;
     if mouse {
         let _ = execute!(out, EnableMouseCapture);
     }
@@ -346,13 +365,14 @@ async fn screen(
                     Err(broadcast::error::RecvError::Closed) => app.commands = None,
                 },
                 Some(explored) = recv_explored(&mut app.exploring) => app.explored(explored).await,
+                Some(progress) = recv(&mut app.progress) => app.progress(progress),
                 () = app.files.receive() => {}
                 Some(line) = logs.0.recv() => app.log_line(line),
                 loaded = async { loading.as_mut().expect("checked").await }, if connecting => {
                     loading = None;
                     app.ready(loaded??).await?;
                 }
-                _ = ticker.tick(), if app.view.is_busy() || connecting => app.tick += 1,
+                _ = ticker.tick(), if app.ticking() || connecting => app.tick += 1,
             }
         }
     }
@@ -407,6 +427,14 @@ async fn recv_explored(
 }
 
 /// The next message of `rx`, or never when there is none.
+async fn recv<T>(rx: &mut Option<mpsc::UnboundedReceiver<T>>) -> Option<T> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The next message of `rx`, or never when there is none.
 async fn next<T: Clone>(
     rx: &mut Option<broadcast::Receiver<T>>,
 ) -> Result<T, broadcast::error::RecvError> {
@@ -452,6 +480,14 @@ impl App {
             commands: None,
             exploring: None,
             background: BTreeSet::new(),
+            children: Vec::new(),
+            progress: None,
+            asked: HashMap::new(),
+            viewing: None,
+            stashed: None,
+            tasks: None,
+            task_rows: Vec::new(),
+            tasks_button: None,
             context: None,
             model: options.model.clone().unwrap_or_default(),
             effort: options.effort,
@@ -484,6 +520,8 @@ impl App {
         self.events = Some(session.subscribe());
         self.approvals = Some(prepared.approvals.subscribe());
         self.commands = Some(prepared.exec.subscribe());
+        let mut prepared = prepared;
+        self.progress = prepared.progress.take();
         self.sessions = recent_sessions(prepared.store.as_ref()).await?;
         self.ready = Some(prepared);
         Ok(())
@@ -498,8 +536,21 @@ impl App {
 
     /// A session event: to the transcript, and the context meter.
     async fn event(&mut self, event: Event) {
-        self.view.apply(&event);
+        self.main_view().apply(&event);
         match &event {
+            // What a task call asks names its subagent in the task list.
+            Event::ActionStarted {
+                call_id,
+                name,
+                input,
+                ..
+            } if name == manifatura::subagents::TASK_TOOL => {
+                let asked = ["description", "prompt"]
+                    .iter()
+                    .find_map(|key| input[key].as_str())
+                    .unwrap_or_default();
+                self.asked.insert(call_id.clone(), asked.to_owned());
+            }
             Event::StepStarted {
                 context_tokens,
                 context_window,
@@ -540,6 +591,62 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// This session's screen, whether it is shown or a subagent's is.
+    fn main_view(&mut self) -> &mut View {
+        self.stashed.as_mut().unwrap_or(&mut self.view)
+    }
+
+    fn main_view_ref(&self) -> &View {
+        self.stashed.as_ref().unwrap_or(&self.view)
+    }
+
+    /// Whether anything on the screen moves with time: a spinner, or a task's clock and output.
+    fn ticking(&self) -> bool {
+        self.view.is_busy() || self.main_view_ref().is_busy() || self.tasks.is_some()
+    }
+
+    /// A subagent's event: a new one joins the task list, and the one shown follows it.
+    fn progress(&mut self, progress: Progress) {
+        let at = match self.children.iter().position(|c| c.id == progress.child) {
+            Some(at) => at,
+            None => {
+                let main = self.ready.as_ref().map(|ready| ready.session.id());
+                if main != Some(&progress.parent) {
+                    return;
+                }
+                let label = self
+                    .asked
+                    .remove(&progress.call_id)
+                    .or_else(|| self.exploring.as_ref().map(|(q, _)| q.clone()))
+                    .unwrap_or_default();
+                self.children.push(Child {
+                    id: progress.child.clone(),
+                    agent: progress.agent.clone(),
+                    label,
+                    started: std::time::Instant::now(),
+                    finished: None,
+                });
+                self.children.len() - 1
+            }
+        };
+        if let Event::TurnCompleted { outcome, .. } = &progress.event {
+            let child = &mut self.children[at];
+            child.finished = Some((child.started.elapsed().as_secs(), *outcome));
+        }
+        if self.viewing == Some(at) {
+            self.view.apply(&progress.event);
+        }
+    }
+
+    /// Forgets the subagents of a session no longer shown.
+    fn forget_children(&mut self) {
+        self.children.clear();
+        self.asked.clear();
+        self.viewing = None;
+        self.stashed = None;
+        self.tasks = None;
     }
 
     /// Drops the background commands the agent no longer keeps.
@@ -590,7 +697,7 @@ impl App {
             return;
         }
         let level = if code == 0 { Level::Info } else { Level::Warn };
-        self.view.notice(
+        self.main_view().notice(
             level,
             format!("background command {id} exited with code {code}"),
         );
@@ -602,7 +709,7 @@ impl App {
     /// Whether an exit in the background starts a turn: only when nothing runs and nobody is being asked.
     fn wakes(&self) -> bool {
         self.ready.is_some()
-            && !self.view.is_busy()
+            && !self.main_view_ref().is_busy()
             && self.asks.is_empty()
             && self.abort.is_none()
             && self.exploring.is_none()
@@ -617,15 +724,25 @@ impl App {
                 row,
                 ..
             }) => {
-                let on_button = self
-                    .log_button
-                    .is_some_and(|button| button.contains((column, row).into()));
-                if on_button {
+                let at = (column, row).into();
+                if self.log_button.is_some_and(|button| button.contains(at)) {
                     self.logs_open = !self.logs_open;
+                } else if self.tasks_button.is_some_and(|button| button.contains(at)) {
+                    match self.tasks {
+                        Some(_) => self.tasks = None,
+                        None => self.open_tasks(),
+                    }
+                } else if let Some(&(_, i)) = self.task_rows.iter().find(|(y, _)| *y == row) {
+                    let action = self.tasks_click(i);
+                    self.act(action).await;
                 }
             }
             Input::Paste(text)
-                if self.asks.is_empty() && self.resume_pick.is_none() && self.rewind.is_none() =>
+                if self.asks.is_empty()
+                    && self.resume_pick.is_none()
+                    && self.rewind.is_none()
+                    && self.tasks.is_none()
+                    && self.viewing.is_none() =>
             {
                 self.picked = 0;
                 self.completions_hidden = false;
@@ -665,6 +782,24 @@ impl App {
                     self.rewind_to(point, restore).await;
                 }
                 None => {}
+            }
+            return;
+        }
+        if self.tasks.is_some() {
+            let action = self.tasks_key(key);
+            self.act(action).await;
+            return;
+        }
+        // A subagent's transcript is only to read: the keys move between sessions.
+        if self.viewing.is_some() {
+            match key.code {
+                KeyCode::Left => self.cycle(-1).await,
+                KeyCode::Right => self.cycle(1).await,
+                KeyCode::Down => self.open_tasks(),
+                KeyCode::Char('c') if ctrl && self.main_view_ref().is_busy() => self.interrupt(),
+                KeyCode::Char('c') if ctrl => self.focus(None).await,
+                KeyCode::Esc => self.focus(None).await,
+                _ => {}
             }
             return;
         }
@@ -735,12 +870,49 @@ impl App {
                     }
                 }
             }
+            // On an empty composer, ← → move between this session and its subagents, and ↓ opens the tasks.
+            (KeyCode::Left, false) if self.text().is_empty() && !self.children.is_empty() => {
+                self.cycle(-1).await
+            }
+            (KeyCode::Right, false) if self.text().is_empty() && !self.children.is_empty() => {
+                self.cycle(1).await
+            }
+            (KeyCode::Down, false)
+                if self.text().is_empty()
+                    && self.browsing.is_none()
+                    && !self.task_list().is_empty() =>
+            {
+                self.open_tasks()
+            }
             (KeyCode::Up, false) if self.input.cursor().0 == 0 => self.browse(-1),
             (KeyCode::Down, false) if self.input.cursor().0 + 1 >= self.input.lines().len() => {
                 self.browse(1)
             }
             _ => {
                 self.input.input(key);
+            }
+        }
+    }
+
+    /// Does what the task panel asked.
+    async fn act(&mut self, action: Action) {
+        match action {
+            Action::Nothing => {}
+            Action::Close => self.tasks = None,
+            Action::Kill(id) => {
+                let stopped = self
+                    .ready
+                    .as_ref()
+                    .is_some_and(|ready| ready.exec.kill(ready.session.id(), id));
+                if stopped {
+                    self.background.remove(&id);
+                    self.main_view()
+                        .notice(Level::Info, format!("stopped command {id}"));
+                }
+            }
+            Action::Focus(i) => {
+                self.tasks = None;
+                self.focus(Some(i)).await;
             }
         }
     }
@@ -933,7 +1105,8 @@ impl App {
                 Level::Info,
                 "Enter sends (while the agent works, before its next step) · Shift+Enter inserts a line · @ picks a file · \
                  Tab completes · Esc or Ctrl-C stops the agent · Ctrl-D or Ctrl-C twice quits · Up and Down recall what \
-                 you sent · with --logs, click logs (or Ctrl-L) for the log",
+                 you sent · on an empty composer, ↓ lists the background tasks and ← → move between the session and its subagents · \
+                 with --logs, click logs (or Ctrl-L) for the log",
             );
             return;
         }
@@ -950,26 +1123,8 @@ impl App {
             self.view.notice(Level::Info, "still connecting");
             return;
         };
-        if command == "/ps" {
-            let processes = ready.exec.processes(ready.session.id());
-            if processes.is_empty() {
-                self.view.notice(Level::Info, "no background commands");
-            }
-            for p in processes {
-                let state = match p.exit {
-                    Some(code) => format!("exited {code}"),
-                    None => "running".to_owned(),
-                };
-                let outside = if p.escalated {
-                    " · outside the sandbox"
-                } else {
-                    ""
-                };
-                self.view.notice(
-                    Level::Info,
-                    format!("{:>3}  {state}{outside}  {}", p.id, p.command),
-                );
-            }
+        if command == "/tasks" {
+            self.open_tasks();
             return;
         }
         if command == "/kill" {
@@ -981,10 +1136,10 @@ impl App {
                 }
                 Ok(id) => self
                     .view
-                    .notice(Level::Warn, format!("no command {id}; /ps lists them")),
+                    .notice(Level::Warn, format!("no command {id}; /tasks lists them")),
                 Err(_) => self
                     .view
-                    .notice(Level::Info, "/kill <id>: /ps lists the commands"),
+                    .notice(Level::Info, "/kill <id>: /tasks lists the commands"),
             }
             return;
         }
@@ -1024,6 +1179,7 @@ impl App {
         match command {
             "/new" => {
                 let session = ready.runtime.session(&ready.agent, SessionId::new());
+                self.forget_children();
                 self.view.clear();
                 self.view.notice(
                     Level::Info,
@@ -1235,12 +1391,14 @@ impl App {
     /// Starts the explore subagent on `question` from `/explore question`, without waiting for the model to
     /// choose it. The transcript shows it as a task; its report then goes to the agent with the question.
     fn explore(&mut self, question: &str, line: &str) {
-        let Some(ready) = &self.ready else { return };
-        self.view.push(Item::User(line.to_owned()));
-        self.view.apply(&Event::TurnStarted {
+        if self.ready.is_none() {
+            return;
+        }
+        self.main_view().push(Item::User(line.to_owned()));
+        self.main_view().apply(&Event::TurnStarted {
             turn: EXPLORE.into(),
         });
-        self.view.apply(&Event::ActionStarted {
+        self.main_view().apply(&Event::ActionStarted {
             turn: EXPLORE.into(),
             call_id: EXPLORE.into(),
             name: manifatura::subagents::TASK_TOOL.into(),
@@ -1249,6 +1407,7 @@ impl App {
         let abort = Abort::new();
         self.abort = Some(abort.clone());
         let (tx, rx) = mpsc::unbounded_channel();
+        let ready = self.ready.as_ref().expect("checked");
         let (subagents, session, prompt) = (
             ready.subagents.clone(),
             ready.session.clone(),
@@ -1268,7 +1427,7 @@ impl App {
     async fn explored(&mut self, explored: Explored) {
         let report = match explored {
             Explored::Line(text) => {
-                return self.view.apply(&Event::ActionLog {
+                return self.main_view().apply(&Event::ActionLog {
                     turn: EXPLORE.into(),
                     call_id: EXPLORE.into(),
                     text,
@@ -1280,7 +1439,7 @@ impl App {
             return;
         };
         let aborted = self.abort.take().is_some_and(|abort| abort.is_aborted());
-        self.view.apply(&Event::ActionResult {
+        self.main_view().apply(&Event::ActionResult {
             turn: EXPLORE.into(),
             call_id: EXPLORE.into(),
             name: manifatura::subagents::TASK_TOOL.into(),
@@ -1292,7 +1451,7 @@ impl App {
         } else {
             manifatura::Outcome::Completed
         };
-        self.view.apply(&Event::TurnCompleted {
+        self.main_view().apply(&Event::TurnCompleted {
             turn: EXPLORE.into(),
             outcome,
             error: None,
@@ -1391,6 +1550,7 @@ impl App {
         let session = ready.runtime.session(&ready.agent, id);
         match session.history().await {
             Ok(history) => {
+                self.forget_children();
                 self.view.clear();
                 self.view.replay(&history);
                 self.view.notice(
@@ -1475,6 +1635,7 @@ mod tests {
             model: Some("gpt-test".into()),
             effort: Some(Effort::High),
             logs: false,
+            mouse: false,
             context_window: None,
         };
         App::new(PathBuf::from("."), &options)
@@ -1642,6 +1803,82 @@ mod tests {
         term.draw(|f| app.draw(f)).unwrap();
         assert!(!term.backend().to_string().contains("Type a file name"));
         assert_eq!(app.text(), "Compare\nthe @");
+    }
+
+    #[tokio::test]
+    async fn a_subagent_is_a_task_that_down_lists_and_a_click_on_the_footer_opens() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = loading_app();
+        app.children.push(Child {
+            id: SessionId::from("s.explore-1"),
+            agent: "explore".into(),
+            label: "where is the approval prompt drawn?".into(),
+            started: std::time::Instant::now(),
+            finished: None,
+        });
+        let mut term = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+        let screen = term.backend().to_string();
+        assert!(screen.contains("1 in background"), "{screen}");
+        assert!(screen.contains("↓ tasks"), "{screen}");
+
+        // A click on the footer's label opens the panel, and one again closes it.
+        let button = app.tasks_button.expect("drawn");
+        let click = |x, y| {
+            Input::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        app.input(click(button.x, button.y)).await;
+        assert!(app.tasks.is_some());
+        app.input(click(button.x, button.y)).await;
+        assert!(app.tasks.is_none());
+
+        // ↓ on the empty composer lists it.
+        app.input(Input::Key(KeyEvent::from(KeyCode::Down))).await;
+        term.draw(|f| app.draw(f)).unwrap();
+        let screen = term.backend().to_string();
+        assert!(screen.contains("Background tasks"), "{screen}");
+        assert!(
+            screen.contains("explore subagent") && screen.contains("running"),
+            "{screen}"
+        );
+        assert_eq!(app.task_rows.len(), 1);
+        app.children[0].finished = Some((40, manifatura::Outcome::Completed));
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(term.backend().to_string().contains("done in 40s"));
+        app.input(Input::Key(KeyEvent::from(KeyCode::Esc))).await;
+        assert!(app.tasks.is_none());
+    }
+
+    #[test]
+    fn enter_on_a_subagent_asks_to_show_it() {
+        let mut app = loading_app();
+        for agent in ["explore", "review"] {
+            app.children.push(Child {
+                id: SessionId::from(format!("s.{agent}")),
+                agent: agent.into(),
+                label: String::new(),
+                started: std::time::Instant::now(),
+                finished: None,
+            });
+        }
+        app.tasks = Some(Tasks::default());
+        assert_eq!(
+            app.tasks_key(KeyEvent::from(KeyCode::Down)),
+            Action::Nothing
+        );
+        assert_eq!(
+            app.tasks_key(KeyEvent::from(KeyCode::Enter)),
+            Action::Focus(1)
+        );
+        assert_eq!(app.tasks_click(0), Action::Focus(0));
+        assert_eq!(app.tasks_key(KeyEvent::from(KeyCode::Esc)), Action::Close);
     }
 
     #[tokio::test]

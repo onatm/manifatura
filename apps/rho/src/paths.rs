@@ -71,6 +71,9 @@ pub(crate) struct Config {
     pub(crate) effort: Option<String>,
     /// The model's context window in tokens, which compaction measures against.
     pub(crate) context_window: Option<u32>,
+    /// Take the mouse, so the footer and the task list answer clicks. The terminal's scroll wheel then reaches
+    /// rho instead of the scrollback.
+    pub(crate) mouse: Option<bool>,
 }
 
 fn read(path: &Path) -> Result<Option<String>> {

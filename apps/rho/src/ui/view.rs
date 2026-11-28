@@ -577,6 +577,41 @@ impl View {
         self.cleared = true;
     }
 
+    /// Shows a turn under way, for a conversation joined while it runs (`messages`, as replayed): the calls
+    /// without results yet run on, and its events take it from here.
+    pub(crate) fn follow(&mut self, messages: &[Message]) {
+        let answered: std::collections::HashSet<&str> = messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|c| match c {
+                Content::ToolResult { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        for content in messages.iter().flat_map(|m| &m.content) {
+            if let Content::ToolCall { id, name, input } = content
+                && !answered.contains(id.as_str())
+            {
+                let (name_shown, subagent) = shown_name(name, input);
+                self.running.push(Running {
+                    call_id: id.clone(),
+                    name: name_shown,
+                    summary: tool_summary(name, input),
+                    subagent,
+                    children: Vec::new(),
+                    details: tool_details(name, input),
+                    started: Instant::now(),
+                });
+            }
+        }
+        self.activity = if self.running.is_empty() {
+            Activity::Thinking
+        } else {
+            Activity::Running
+        };
+        self.since = Some(Instant::now());
+    }
+
     /// Whether the scrollback is to be wiped, once.
     pub(crate) fn take_cleared(&mut self) -> bool {
         std::mem::take(&mut self.cleared)

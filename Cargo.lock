@@ -1809,6 +1809,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "strip-ansi-escapes",
  "tokio",
  "toml",
  "tracing",

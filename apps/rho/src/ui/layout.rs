@@ -52,6 +52,9 @@ impl App {
         if let Some(rewind) = &self.rewind {
             return rewind.height(width, limit);
         }
+        if let Some(tasks) = &self.tasks {
+            return self.tasks_height(tasks, height, limit);
+        }
         let editor = self.editor_rows(width);
         let logs = if self.logs_open {
             self.log.len().clamp(1, LOG_PANEL) + 1
@@ -79,16 +82,28 @@ impl App {
         let mut rows = f.area();
         if let Some(ask) = self.asks.front() {
             self.log_button = None;
+            self.tasks_button = None;
+            self.task_rows.clear();
             ask.draw(f, rows);
             return;
         }
         if let Some(selected) = self.resume_pick {
+            self.tasks_button = None;
+            self.task_rows.clear();
             self.draw_sessions(f, rows, selected);
             return;
         }
         if let Some(rewind) = &self.rewind {
             self.log_button = None;
+            self.tasks_button = None;
             rewind.draw(f, rows);
+            return;
+        }
+        self.task_rows.clear();
+        if self.tasks.is_some() {
+            self.log_button = None;
+            self.tasks_button = None;
+            self.draw_tasks(f, rows);
             return;
         }
         let width = rows.width as usize;
@@ -230,10 +245,13 @@ impl App {
         if width == 0 {
             return;
         }
-        let placeholder = if self.view.is_busy() {
-            "Steer the agent…"
-        } else {
-            "Ask rho…"
+        let placeholder = match self.viewing.and_then(|i| self.children.get(i)) {
+            Some(child) => format!(
+                "Viewing the {} subagent · ← → switch · Esc back",
+                child.agent
+            ),
+            None if self.view.is_busy() => "Steer the agent…".into(),
+            None => "Ask rho…".into(),
         };
         self.input.set_placeholder_text(placeholder);
         f.render_widget(
@@ -339,14 +357,35 @@ impl App {
             Some((used, None)) => parts.push(format!("{} context", tokens(used))),
             None => {}
         }
-        if !self.background.is_empty() {
-            parts.push(format!("{} in background", self.background.len()));
-        }
+        parts.retain(|p| !p.is_empty());
+        let running = self.running_tasks();
+        let tasks_at = (running > 0).then(|| {
+            parts.push(format!("{running} in background"));
+            parts.len() - 1
+        });
         // OpenAI asks apps on the plan to say so.
         parts.push("ChatGPT plan".into());
-        parts.retain(|p| !p.is_empty());
+        let viewing = self.viewing.and_then(|i| self.children.get(i));
+        if let Some(child) = viewing {
+            parts = vec![format!("{} subagent", child.agent), child.state()];
+        }
         let mut left = parts.join(" · ");
-        let hint = if self.files.active() {
+        // The tasks label answers clicks.
+        self.tasks_button = tasks_at.filter(|_| viewing.is_none()).map(|at| {
+            let before = parts[..at]
+                .iter()
+                .map(|p| Line::raw(p.as_str()).width() + 3)
+                .sum::<usize>();
+            Rect {
+                x: body.x + before as u16,
+                width: Line::raw(parts[at].as_str()).width() as u16,
+                ..body
+            }
+        });
+        let tasks = self.tasks_button.is_some() || !self.children.is_empty();
+        let hint = if viewing.is_some() {
+            "← → switch · ↓ tasks · Esc back"
+        } else if self.files.active() {
             "↑↓ select · Tab/Enter insert · Esc close"
         } else if self.view.is_busy() && body.width < 65 {
             "Esc interrupt"
@@ -354,6 +393,10 @@ impl App {
             "Enter steer · Esc interrupt"
         } else if !self.completions().is_empty() {
             "↑↓ select · Tab complete · Esc close"
+        } else if tasks && !self.children.is_empty() {
+            "↓ tasks · ← → subagents · / commands"
+        } else if tasks {
+            "↓ tasks · @ files · / commands"
         } else {
             "@ files · / commands"
         };
@@ -364,6 +407,11 @@ impl App {
             left.push_str(hint);
         } else if self.view.is_busy() || self.files.active() {
             left = hint.to_owned();
+            self.tasks_button = None;
+        }
+        if let Some(button) = &mut self.tasks_button {
+            // Clipped to what is drawn.
+            button.width = button.width.min(body.right().saturating_sub(button.x));
         }
         f.render_widget(Line::styled(left, dim()), body);
     }

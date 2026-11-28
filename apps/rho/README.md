@@ -33,7 +33,7 @@ cargo run -p rho -- models           # the models your plan offers
 
 | Path | What |
 | --- | --- |
-| `~/.config/rho/config.toml` | `model`, `effort` (off, low, medium, high), `context_window` |
+| `~/.config/rho/config.toml` | `model`, `effort` (off, low, medium, high), `context_window`, `mouse` (clicks on the footer and the task list; the scroll wheel then goes to rho, not the scrollback) |
 | `~/.config/rho/rules.toml` | `allow`, `ask` and `deny` rules, such as `exec_command(npm install)` or `mcp__exa__*` |
 | `.rho/rules.toml` | A project's rules: `ask` and `deny` only |
 | `~/.config/rho/mcp.toml` | MCP servers (`[servers.<name>]` with `url` or `command`) |
@@ -41,5 +41,10 @@ cargo run -p rho -- models           # the models your plan offers
 | `~/.local/share/rho/sessions/<directory>` | Sessions, one JSON-lines file each |
 | `~/.local/share/rho/snapshots/<directory>.git` | The workspace as each turn found it |
 
-In the chat, `/help` lists the commands: `/model`, `/effort` (the levels the model has), `/ps` and `/kill` for background commands, `/rules`,
-`/rewind`, `/compact`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops it.
+In the chat, `/help` lists the commands: `/model`, `/effort` (the levels the model has), `/tasks` and `/kill` for background commands
+and subagents, `/rules`, `/rewind`, `/compact`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops
+it.
+
+The background tasks are the commands left running and the subagents started. ↓ on an empty composer (or `/tasks`, or a click on
+"N in background" with `mouse = true`) lists them: Enter on a command shows its output as it runs, `k` stops it, and Enter on a subagent
+shows its transcript, followed live. ← → on an empty composer move between the session and its subagents; Esc goes back.

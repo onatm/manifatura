@@ -20,7 +20,7 @@ use manifatura::sandbox::Sandbox;
 use manifatura::skills::{SkillSet, Skills, SystemPromptExt};
 use manifatura::snapshots::Snapshots;
 use manifatura::store::JsonlStore;
-use manifatura::subagents::{Definition, Subagent, Subagents};
+use manifatura::subagents::{Definition, Progress, Subagent, Subagents};
 use manifatura::tools::Local;
 use manifatura::{
     Abort, Agent, BoxStream, Effort, Env, Message, ModelInfo, ModelRequest, Provider, Runtime,
@@ -72,6 +72,8 @@ pub(crate) struct ChatOptions {
     pub(crate) effort: Option<Effort>,
     /// Keep the log, behind a button on the screen.
     pub(crate) logs: bool,
+    /// Take the mouse for clicks, which also takes the scroll wheel from the terminal.
+    pub(crate) mouse: bool,
     /// The context window compaction measures against, instead of the model's own.
     pub(crate) context_window: Option<u32>,
 }
@@ -91,6 +93,8 @@ pub(crate) struct Prepared {
     pub(crate) skills: SkillSet,
     /// The subagents behind the `task` tool, which `/explore` also starts.
     pub(crate) subagents: Subagents,
+    /// What the running subagents do, event by event, for the screen to follow them.
+    pub(crate) progress: Option<tokio::sync::mpsc::UnboundedReceiver<Progress>>,
     /// The files as each turn found them, for `/rewind`.
     pub(crate) snapshots: Snapshots,
     /// Where the tools act.
@@ -175,7 +179,10 @@ pub(crate) async fn prepare(
     let mut tools = manifatura::tools::by_name(TOOLS).map_err(anyhow::Error::msg)?;
     tools.extend(exec.tools());
     tools.push(crate::plan::update_plan());
-    let subagents = subagents()?;
+    let (progress, watched) = tokio::sync::mpsc::unbounded_channel();
+    let subagents = subagents()?.on_event(move |p: &Progress| {
+        let _ = progress.send(p.clone());
+    });
     tools.push(subagents.tool());
 
     // MCP tools come after the built-ins. A server's tools are deferred unless it is `eager`: the model finds them
@@ -294,6 +301,7 @@ pub(crate) async fn prepare(
         files: files.into_iter().map(|file| file.path).collect(),
         skills,
         subagents,
+        progress: Some(watched),
         snapshots,
         env,
         sandbox,
