@@ -382,3 +382,75 @@ async fn remote_glob_counts_every_match() {
     let r = ws.call(&glob(), json!({"pattern": "*.txt"})).await;
     assert_eq!(r.output, "new.txt\nold.txt");
 }
+
+#[tokio::test]
+async fn apply_patch_adds_updates_moves_and_deletes_or_changes_nothing() {
+    let ws = Ws::new("patch");
+    let t = Arc::new(FileTracker::default());
+    let (read, edit, patch) = (read(t.clone()), edit(t.clone()), apply_patch(t));
+    assert!(patch.spec().format.is_text());
+    ws.file("src/a.rs", "fn a() {\n    old();\n}\n");
+    ws.file("gone.txt", "bye\n");
+    ws.file("keep.txt", "keep\n");
+
+    let r = ws
+        .call(
+            &patch,
+            json!({ "input": "*** Begin Patch\n\
+                *** Add File: notes/new.md\n+# New\n\
+                *** Update File: src/a.rs\n*** Move to: src/b.rs\n@@ fn a() {\n-    old();\n+    new();\n\
+                *** Delete File: gone.txt\n\
+                *** End Patch" }),
+        )
+        .await;
+    assert!(!r.is_error, "{}", r.output);
+    assert_eq!(
+        r.output,
+        "Success. Updated the following files:\nA notes/new.md\nM src/b.rs\nD gone.txt"
+    );
+    assert_eq!(ws.text("notes/new.md"), "# New\n");
+    assert_eq!(ws.text("src/b.rs"), "fn a() {\n    new();\n}\n");
+    assert!(!ws.dir.join("src/a.rs").exists() && !ws.dir.join("gone.txt").exists());
+
+    // The second update fails, so the first is not written either.
+    let r = ws
+        .call(
+            &patch,
+            json!({ "input": "*** Begin Patch\n\
+                *** Update File: keep.txt\n@@\n-keep\n+changed\n\
+                *** Update File: src/b.rs\n@@\n-missing();\n+x();\n\
+                *** End Patch" }),
+        )
+        .await;
+    assert!(
+        r.is_error
+            && r.output
+                .contains("failed to find the expected lines in src/b.rs")
+    );
+    assert_eq!(ws.text("keep.txt"), "keep\n");
+
+    let r = ws
+        .call(
+            &patch,
+            json!({ "input": "*** Begin Patch\n*** Update File: nope.rs\n@@\n-a\n+b\n*** End Patch" }),
+        )
+        .await;
+    assert!(r.is_error && r.output.contains("file not found: nope.rs"));
+
+    // A file the patch changed counts as seen: `edit` may change it without reading again.
+    ws.call(&read, json!({"path": "src/b.rs"})).await;
+    let r = ws
+        .call(
+            &patch,
+            json!({ "input": "*** Begin Patch\n*** Update File: src/b.rs\n@@\n-    new();\n+    newer();\n*** End Patch" }),
+        )
+        .await;
+    assert!(!r.is_error, "{}", r.output);
+    let r = ws
+        .call(
+            &edit,
+            json!({"path": "src/b.rs", "edits": [{"old_text": "newer", "new_text": "newest"}]}),
+        )
+        .await;
+    assert!(!r.is_error, "{}", r.output);
+}

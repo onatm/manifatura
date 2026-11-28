@@ -1,0 +1,31 @@
+[package]
+name = "manifatura-auth"
+description = "Signing in to model vendors for manifatura, such as OpenAI's Sign in with ChatGPT."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-auth"
+
+[dependencies]
+base64 = "0.23.1"
+manifatura-agent.workspace = true
+manifatura-providers = { workspace = true, features = ["responses"] }
+reqwest.workspace = true
+ring = "0.17.14"
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "net", "io-util"] }
+url = "2.5.8"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

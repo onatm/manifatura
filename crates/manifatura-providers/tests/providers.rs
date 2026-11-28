@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use manifatura_agent::*;
-use manifatura_models::{Models, OpenAi};
+use manifatura_providers::{Models, OpenAi};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -130,11 +130,11 @@ fn request() -> ModelRequest {
     ];
     ModelRequest::new("m", messages)
         .system("Be brief.")
-        .tools(vec![ToolSpec {
-            name: "lookup".into(),
-            description: "Look up.".into(),
-            input_schema: json!({"type": "object"}),
-        }])
+        .tools(vec![ToolSpec::new(
+            "lookup",
+            "Look up.",
+            json!({"type": "object"}),
+        )])
         .max_tokens(100)
 }
 
@@ -322,4 +322,215 @@ fn model_info_prefers_overrides_then_catalog() {
         8_192
     );
     assert!(m.model_info("groq/x").is_none());
+}
+
+#[cfg(feature = "responses")]
+mod responses {
+    use super::*;
+    use manifatura_providers::responses::{BearerFuture, Credentials, Responses};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Hands out `t0`, then `t1` after a refusal.
+    #[derive(Clone, Default)]
+    struct Rotating(Arc<AtomicUsize>);
+
+    impl Credentials for Rotating {
+        fn bearer(&self, refused: bool) -> BearerFuture<'_> {
+            if refused {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            let n = self.0.load(Ordering::SeqCst);
+            Box::pin(async move { Ok(format!("t{n}")) })
+        }
+    }
+
+    #[tokio::test]
+    async fn streams_reasoning_text_and_a_tool_call_after_a_refresh() {
+        let d = |v: Value| format!("event: x\ndata: {v}\n\n");
+        let chunks = vec![
+            d(json!({"type":"response.reasoning_summary_text.delta","delta":"thinking"})),
+            d(
+                json!({"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"ENC"}}),
+            ),
+            d(json!({"type":"response.output_text.delta","delta":"Reading."})),
+            d(
+                json!({"type":"response.output_item.added","item":{"type":"function_call","id":"fc1","call_id":"c1","name":"read","arguments":""}}),
+            ),
+            d(
+                json!({"type":"response.function_call_arguments.delta","item_id":"fc1","delta":"{\"path\":"}),
+            ),
+            d(
+                json!({"type":"response.function_call_arguments.delta","item_id":"fc1","delta":"\"a\"}"}),
+            ),
+            d(
+                json!({"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":5}}}),
+            ),
+        ];
+        let refused = Canned {
+            status: 401,
+            headers: vec![],
+            chunks: vec!["{\"detail\":\"expired\"}".into()],
+        };
+        let (mock, url) = Mock::start(vec![refused, sse(chunks)]).await;
+        let creds = Rotating::default();
+        let p = Responses::new(format!("{url}/v1"))
+            .credentials(creds.clone())
+            .namespace("workspace", "Workspace tools");
+        let (events, r) = collect(&p, request()).await;
+
+        assert_eq!(r.stop, StopReason::ToolUse);
+        assert!(events.contains(&StreamEvent::TextDelta("Reading.".into())));
+        assert_eq!(
+            r.message.content[0],
+            Content::Thinking {
+                text: "thinking".into(),
+                signature: Some("ENC".into())
+            }
+        );
+        assert_eq!(
+            r.message.content[2],
+            Content::ToolCall {
+                id: "c1".into(),
+                name: "read".into(),
+                input: json!({"path": "a"})
+            }
+        );
+        let reqs = mock.requests();
+        assert_eq!(reqs.len(), 2);
+        assert!(
+            reqs[0]
+                .0
+                .to_ascii_lowercase()
+                .contains("authorization: bearer t0")
+        );
+        assert!(
+            reqs[1]
+                .0
+                .to_ascii_lowercase()
+                .contains("authorization: bearer t1")
+        );
+        assert!(reqs[1].0.starts_with("POST /v1/responses"));
+        assert_eq!(reqs[1].1["tools"][0]["type"], "namespace");
+    }
+
+    #[tokio::test]
+    async fn each_message_keeps_its_phase_and_sends_it_back() {
+        let d = |v: Value| format!("event: x\ndata: {v}\n\n");
+        let chunks = vec![
+            d(
+                json!({"type":"response.output_item.added","item":{"type":"message","role":"assistant","phase":"commentary"}}),
+            ),
+            d(json!({"type":"response.output_text.delta","delta":"Checking."})),
+            d(
+                json!({"type":"response.output_item.added","item":{"type":"message","role":"assistant","phase":"final_answer"}}),
+            ),
+            d(json!({"type":"response.output_text.delta","delta":"Done."})),
+            d(
+                json!({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2}}}),
+            ),
+        ];
+        let done = vec![d(
+            json!({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":0}}}),
+        )];
+        let (mock, url) = Mock::start(vec![sse(chunks), sse(done)]).await;
+        let p = Responses::new(format!("{url}/v1"));
+        let (events, r) = collect(&p, request()).await;
+        // Each message's start is streamed with its phase, ahead of its text.
+        let starts: Vec<&StreamEvent> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::MessageStarted { .. }))
+            .collect();
+        assert_eq!(
+            starts,
+            [
+                &StreamEvent::MessageStarted {
+                    phase: Some(Phase::Commentary)
+                },
+                &StreamEvent::MessageStarted {
+                    phase: Some(Phase::FinalAnswer)
+                },
+            ]
+        );
+        assert_eq!(
+            r.message.content,
+            [
+                Content::Text {
+                    text: "Checking.".into(),
+                    phase: Some(Phase::Commentary)
+                },
+                Content::Text {
+                    text: "Done.".into(),
+                    phase: Some(Phase::FinalAnswer)
+                },
+            ]
+        );
+        // Sent back, each message carries its phase; one without a phase carries none.
+        let mut req = request();
+        req.messages.push(r.message);
+        req.messages
+            .push(Message::new(Role::Assistant, vec![Content::text("Old.")]));
+        collect(&p, req).await;
+        let input = mock.requests()[1].1["input"].clone();
+        let n = input.as_array().unwrap().len();
+        assert_eq!(input[n - 3]["phase"], "commentary");
+        assert_eq!(input[n - 2]["phase"], "final_answer");
+        assert!(input[n - 1].get("phase").is_none());
+    }
+
+    #[tokio::test]
+    async fn streams_a_free_form_call_as_text_input() {
+        let d = |v: Value| format!("event: x\ndata: {v}\n\n");
+        let patch = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch";
+        let chunks = vec![
+            d(
+                json!({"type":"response.output_item.added","item":{"type":"custom_tool_call","id":"ct1","call_id":"c1","name":"apply_patch","input":""}}),
+            ),
+            d(
+                json!({"type":"response.custom_tool_call_input.delta","item_id":"ct1","delta":"*** Begin Patch\n"}),
+            ),
+            d(
+                json!({"type":"response.output_item.done","item":{"type":"custom_tool_call","id":"ct1","call_id":"c1","name":"apply_patch","input":patch}}),
+            ),
+            d(
+                json!({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2}}}),
+            ),
+        ];
+        let (_mock, url) = Mock::start(vec![sse(chunks)]).await;
+        let p = Responses::new(format!("{url}/v1")).key("k");
+        let req = ModelRequest::new("m", vec![Message::user("add a.txt")])
+            .tools(vec![ToolSpec::text("apply_patch", "Patch files.", None)]);
+        let (events, r) = collect(&p, req).await;
+
+        assert_eq!(r.stop, StopReason::ToolUse);
+        assert!(events.contains(&StreamEvent::ToolCallStarted {
+            id: "c1".into(),
+            name: "apply_patch".into()
+        }));
+        assert_eq!(
+            r.message.content[0],
+            Content::ToolCall {
+                id: "c1".into(),
+                name: "apply_patch".into(),
+                input: json!({ "input": patch })
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_usage_failure_mid_stream() {
+        let d = |v: Value| format!("data: {v}\n\n");
+        let chunks = vec![
+            d(json!({"type":"response.output_text.delta","delta":"Hi"})),
+            d(
+                json!({"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"limit"}}}),
+            ),
+        ];
+        let (_mock, url) = Mock::start(vec![sse(chunks)]).await;
+        let p = Responses::new(format!("{url}/v1")).key("k");
+        let (_, r) = collect(&p, request()).await;
+        match r.stop {
+            StopReason::Error(e) => assert_eq!(e.kind, ErrorKind::RateLimited),
+            other => panic!("{other:?}"),
+        }
+    }
 }

@@ -167,10 +167,10 @@ fn push_message(out: &mut Vec<Value>, m: &Message) {
                 .content
                 .iter()
                 .filter_map(|c| match c {
-                    Content::Text { text } if m.role == Role::System => {
+                    Content::Text { text, .. } if m.role == Role::System => {
                         Some(json!({ "type": "text", "text": system_note_text(text) }))
                     }
-                    Content::Text { text } => Some(json!({ "type": "text", "text": text })),
+                    Content::Text { text, .. } => Some(json!({ "type": "text", "text": text })),
                     Content::Image { media_type, data } => Some(json!({
                         "type": "image_url",
                         "image_url": { "url": format!("data:{media_type};base64,{data}") }
@@ -292,6 +292,7 @@ impl OpenAi {
                             id,
                             name,
                             args: String::new(),
+                            text: false,
                         });
                         acc.blocks.len() - 1
                     });
@@ -348,11 +349,8 @@ mod tests {
         let mut req =
             ModelRequest::new("m", vec![Message::user("hi")]).tool_choice(ToolChoice::Off);
         assert!(body(&req, false).get("tool_choice").is_none());
-        req.tools.push(ToolSpec {
-            name: "t".into(),
-            description: "d".into(),
-            input_schema: json!({"type": "object"}),
-        });
+        req.tools
+            .push(ToolSpec::new("t", "d", json!({"type": "object"})));
         assert_eq!(body(&req, false)["tool_choice"], "none");
         req.tool_choice = ToolChoice::Auto;
         assert!(body(&req, false).get("tool_choice").is_none());

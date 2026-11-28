@@ -3,6 +3,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// What a text block of the model's is for (OpenAI's Responses API calls it the `phase`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Phase {
+    /// An update while it works, before tool calls.
+    Commentary,
+    /// Its answer for the turn.
+    FinalAnswer,
+}
+
 /// Who a message is from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +38,10 @@ pub enum Content {
     Text {
         /// The text.
         text: String,
+        /// What the text is for, when the provider says: an update while the model works, or
+        /// its final answer. Providers that distinguish them need it back on later requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<Phase>,
     },
     /// The model's reasoning before it answers.
     Thinking {
@@ -65,6 +80,16 @@ pub enum Content {
     },
 }
 
+impl Content {
+    /// A text block without a phase.
+    pub fn text(text: impl Into<String>) -> Self {
+        Content::Text {
+            text: text.into(),
+            phase: None,
+        }
+    }
+}
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -86,24 +111,24 @@ impl Message {
 
     /// A user message of one text block.
     pub fn user(text: impl Into<String>) -> Self {
-        Self::new(Role::User, vec![Content::Text { text: text.into() }])
+        Self::new(Role::User, vec![Content::text(text)])
     }
 
     /// An assistant message of one text block.
     pub fn assistant(text: impl Into<String>) -> Self {
-        Self::new(Role::Assistant, vec![Content::Text { text: text.into() }])
+        Self::new(Role::Assistant, vec![Content::text(text)])
     }
 
     /// A [`Role::System`] note of one text block.
     pub fn system_note(text: impl Into<String>) -> Self {
-        Self::new(Role::System, vec![Content::Text { text: text.into() }])
+        Self::new(Role::System, vec![Content::text(text)])
     }
 
     /// Concatenated text blocks.
     pub fn text(&self) -> String {
         let mut out = String::new();
         for c in &self.content {
-            if let Content::Text { text } = c {
+            if let Content::Text { text, .. } = c {
                 out.push_str(text);
             }
         }
@@ -142,8 +167,9 @@ pub struct ToolCall {
     pub input: Value,
 }
 
-/// What the model is told about a tool.
+/// What the model is told about a tool. Build one with [`ToolSpec::new`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolSpec {
     /// The name the model calls it by.
     pub name: String,
@@ -151,6 +177,131 @@ pub struct ToolSpec {
     pub description: String,
     /// JSON Schema for the tool input; always an object schema.
     pub input_schema: Value,
+    /// How the model writes the input: a JSON object (the default) or free text.
+    #[serde(default, skip_serializing_if = "ToolFormat::is_json")]
+    pub format: ToolFormat,
+}
+
+impl ToolSpec {
+    /// A tool whose input is a JSON object matching `input_schema`.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            input_schema,
+            format: ToolFormat::Json,
+        }
+    }
+
+    /// A tool whose input is free text, constrained by `grammar` if given. Its `input_schema`
+    /// is an object with one string field, `input` ([`TEXT_INPUT`]).
+    pub fn text(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        grammar: Option<Grammar>,
+    ) -> Self {
+        Self {
+            format: ToolFormat::Text { grammar },
+            ..Self::new(name, description, text_input_schema())
+        }
+    }
+}
+
+/// The field a text tool's input arrives in: `{"input": "…"}`.
+pub const TEXT_INPUT: &str = "input";
+
+/// The input schema of a text tool: an object with one required string field, `input`.
+pub fn text_input_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": { TEXT_INPUT: { "type": "string" } },
+        "required": [TEXT_INPUT],
+        "additionalProperties": false,
+    })
+}
+
+/// How the model writes a tool's input.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ToolFormat {
+    /// A JSON object matching the tool's `input_schema`.
+    #[default]
+    Json,
+    /// Free text, such as a patch, optionally constrained by a grammar. A provider that
+    /// supports free-form tools (OpenAI's Responses API) lets the model write the text raw;
+    /// the others offer the tool's `input_schema`, an object with one string field. Either
+    /// way, the call reaches hooks and the tool as `{"input": text}`.
+    Text {
+        /// The grammar the text must follow, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        grammar: Option<Grammar>,
+    },
+}
+
+impl ToolFormat {
+    /// Whether it is [`ToolFormat::Json`].
+    pub fn is_json(&self) -> bool {
+        *self == ToolFormat::Json
+    }
+
+    /// Whether it is [`ToolFormat::Text`].
+    pub fn is_text(&self) -> bool {
+        matches!(self, ToolFormat::Text { .. })
+    }
+}
+
+/// A grammar for a text tool's input, which a provider that supports it enforces while the
+/// model writes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Grammar {
+    /// The grammar's notation.
+    pub syntax: GrammarSyntax,
+    /// The grammar itself.
+    pub definition: String,
+}
+
+impl Grammar {
+    /// A [Lark](https://lark-parser.readthedocs.io) grammar.
+    pub fn lark(definition: impl Into<String>) -> Self {
+        Self {
+            syntax: GrammarSyntax::Lark,
+            definition: definition.into(),
+        }
+    }
+
+    /// A regular expression the whole input must match.
+    pub fn regex(definition: impl Into<String>) -> Self {
+        Self {
+            syntax: GrammarSyntax::Regex,
+            definition: definition.into(),
+        }
+    }
+}
+
+/// A grammar's notation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum GrammarSyntax {
+    /// Lark.
+    Lark,
+    /// A regular expression.
+    Regex,
+}
+
+impl GrammarSyntax {
+    /// The name providers use: `lark` or `regex`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GrammarSyntax::Lark => "lark",
+            GrammarSyntax::Regex => "regex",
+        }
+    }
 }
 
 /// Tokens a model call used, as the provider reports them; zeros when it reports none.
@@ -199,17 +350,48 @@ pub enum Effort {
     Medium,
     /// Much.
     High,
+    /// More than high, where the model has it.
+    #[serde(rename = "xhigh")]
+    XHigh,
+    /// As much as the model's usual reasoning allows, where it has it.
+    Max,
+    /// Beyond max, where the model has it.
+    Ultra,
 }
 
 impl Effort {
-    /// The name OpenAI-style APIs use: `none`, `low`, `medium` or `high`.
+    /// Every level, from none to the most.
+    pub const ALL: [Effort; 7] = [
+        Effort::Off,
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::XHigh,
+        Effort::Max,
+        Effort::Ultra,
+    ];
+
+    /// The name OpenAI-style APIs use: `none`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`.
+    /// Not every model has every level; a provider's model list says which it has.
     pub fn as_str(self) -> &'static str {
         match self {
             Effort::Off => "none",
             Effort::Low => "low",
             Effort::Medium => "medium",
             Effort::High => "high",
+            Effort::XHigh => "xhigh",
+            Effort::Max => "max",
+            Effort::Ultra => "ultra",
         }
+    }
+
+    /// The level named `name`, as [`as_str`](Self::as_str) writes it (`off` for none too), in any case.
+    pub fn parse(name: &str) -> Option<Effort> {
+        let name = name.trim().to_ascii_lowercase();
+        if name == "off" {
+            return Some(Effort::Off);
+        }
+        Effort::ALL.into_iter().find(|e| e.as_str() == name)
     }
 }
 
@@ -260,7 +442,7 @@ impl ToolChoice {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ModelRequest {
-    /// Model id. Through `manifatura-models`' `Models` this is `provider/model-id`; a
+    /// Model id. Through `manifatura-providers`' `Models` this is `provider/model-id`; a
     /// concrete provider receives only the model id.
     pub model: String,
     /// The system prompt; empty for none.
@@ -403,6 +585,12 @@ impl Response {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum StreamEvent {
+    /// A message of the answer began; its text follows as [`StreamEvent::TextDelta`]s. `phase` says what it is
+    /// for, when the provider says (OpenAI's Responses API does).
+    MessageStarted {
+        /// A progress update or the final answer.
+        phase: Option<Phase>,
+    },
     /// More of the answer's text.
     TextDelta(String),
     /// More of the model's reasoning.

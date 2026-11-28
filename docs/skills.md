@@ -91,4 +91,4 @@ Apps often let the user start a skill themselves, with `/release-notes` or simil
 
 ## Skills and the context
 
-The catalog is part of the system prompt, so it is fixed when the session starts and the prompt cache stays warm; skills added later appear in the next session. A skill's instructions apply for the rest of the task, so the `skill` tool [keeps its results](tools.md#flags): `kit::compaction::trim_results` leaves them whole when it shortens old tool output.
+The catalog is part of the system prompt, so it is fixed when the session starts and the prompt cache stays warm; skills added later appear in the next session. A skill's instructions apply for the rest of the task, so the `skill` tool [keeps its results](tools.md#flags): `kit::compaction::drop_old_results` and `trim_results` leave them whole when they drop or shorten old tool output.

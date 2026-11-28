@@ -34,7 +34,7 @@ enum Seen {
 }
 
 impl FileTracker {
-    fn record(&self, s: &SessionId, path: &Path, stat: &Stat) {
+    pub(crate) fn record(&self, s: &SessionId, path: &Path, stat: &Stat) {
         self.seen
             .lock()
             .unwrap()
@@ -54,7 +54,7 @@ impl FileTracker {
         }
     }
 
-    fn lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    pub(crate) fn lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
         self.locks
             .lock()
             .unwrap()
@@ -64,7 +64,7 @@ impl FileTracker {
     }
 }
 
-fn display(env: &dyn Env, path: &Path) -> String {
+pub(crate) fn display(env: &dyn Env, path: &Path) -> String {
     path.strip_prefix(env.cwd())
         .unwrap_or(path)
         .display()
@@ -72,7 +72,7 @@ fn display(env: &dyn Env, path: &Path) -> String {
 }
 
 /// Small models often guess paths; say where paths resolve and how to look.
-fn not_found(env: &dyn Env, shown: &str, extra: &str) -> ToolError {
+pub(crate) fn not_found(env: &dyn Env, shown: &str, extra: &str) -> ToolError {
     ToolError::msg(format!(
         "file not found: {shown}. Relative paths resolve against {}; use glob to find \
          files.{extra}",
@@ -80,7 +80,11 @@ fn not_found(env: &dyn Env, shown: &str, extra: &str) -> ToolError {
     ))
 }
 
-async fn stat_file(env: &dyn Env, path: &Path, shown: &str) -> Result<Option<Stat>, ToolError> {
+pub(crate) async fn stat_file(
+    env: &dyn Env,
+    path: &Path,
+    shown: &str,
+) -> Result<Option<Stat>, ToolError> {
     match env.stat(path).await? {
         Some(s) if s.kind == FileKind::Dir => Err(ToolError::msg(format!(
             "{shown} is a directory; use glob (e.g. `{shown}/*`) to list it"

@@ -712,7 +712,7 @@ async fn response_hook_changes_what_is_recorded() {
 async fn step_end_reports_usage_and_context() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let s2 = seen.clone();
-    let mut resp = reply(vec![Content::Text { text: "ok".into() }], StopReason::Stop);
+    let mut resp = reply(vec![Content::text("ok")], StopReason::Stop);
     resp.usage.input = 1_000;
     resp.usage.output = 10;
     let p = ScriptedProvider::new().respond(resp);
@@ -1024,14 +1024,8 @@ async fn runtime_hooks_apply_to_sessions_a_tool_opens() {
 
 #[tokio::test]
 async fn compaction_never_runs_by_itself() {
-    let p = ScriptedProvider::new().fallback(|_| {
-        reply(
-            vec![Content::Text {
-                text: "word ".repeat(2_000),
-            }],
-            StopReason::Stop,
-        )
-    });
+    let p = ScriptedProvider::new()
+        .fallback(|_| reply(vec![Content::text("word ".repeat(2_000))], StopReason::Stop));
     let rt = runtime(&p, mem());
     let s = rt.session(&Agent::new("x").context_window(2_000), SessionId::new());
     for i in 0..5 {
@@ -1153,4 +1147,183 @@ async fn a_hook_can_fail_the_turn_before_the_model_is_called() {
         .await;
     assert!(matches!(r, Err(Error::Failed(m)) if m == "agent.lua: syntax error"));
     assert!(p.requests().is_empty());
+}
+
+#[tokio::test]
+async fn a_text_tool_gets_the_text_however_it_arrives() {
+    let echo = Tool::new("note", "Keep a note.")
+        .grammar(Grammar::regex("[a-z ]+"))
+        .run_text(|text: String, _cx| async move { Ok(format!("noted: {text}")) });
+    assert_eq!(
+        echo.spec().format,
+        ToolFormat::Text {
+            grammar: Some(Grammar::regex("[a-z ]+"))
+        }
+    );
+    assert_eq!(echo.spec().input_schema, text_input_schema());
+
+    let cx = || ToolCx::detached("c1");
+    let r = echo.call(json!({ "input": "buy milk" }), cx()).await;
+    assert_eq!((r.output.as_str(), r.is_error), ("noted: buy milk", false));
+    let r = echo.call(json!("buy bread"), cx()).await;
+    assert_eq!(r.output, "noted: buy bread", "a bare string is the text");
+    let r = echo.call(json!({ "text": "x" }), cx()).await;
+    assert!(r.is_error);
+    assert!(r.output.contains("`input`"));
+
+    let json_tool =
+        Tool::new("t", "d").run_json(json!({"type": "object"}), |_, _| async { Ok("") });
+    assert!(json_tool.spec().format.is_json());
+}
+
+#[test]
+fn efforts_read_their_api_names() {
+    for e in Effort::ALL {
+        assert_eq!(Effort::parse(e.as_str()), Some(e));
+    }
+    assert_eq!(Effort::parse("Off"), Some(Effort::Off));
+    assert_eq!(Effort::parse("XHIGH"), Some(Effort::XHigh));
+    assert_eq!(serde_json::to_value(Effort::XHigh).unwrap(), json!("xhigh"));
+    assert_eq!(Effort::parse("extreme"), None);
+}
+
+#[tokio::test]
+async fn the_path_follows_the_current_branch() {
+    let p = ScriptedProvider::new()
+        .text("one")
+        .text("two")
+        .text("three");
+    let rt = runtime(&p, mem());
+    let s = rt.session(&Agent::new("t").model("m"), SessionId::new());
+    s.prompt("a").await.unwrap().wait().await.unwrap();
+    s.prompt("b").await.unwrap().wait().await.unwrap();
+    let texts = |path: &[Entry]| -> Vec<String> {
+        path.iter()
+            .filter_map(|e| match &e.record {
+                Record::Message { message } => Some(message.text()),
+                _ => None,
+            })
+            .collect()
+    };
+    let path = s.path().await.unwrap();
+    assert_eq!(texts(&path), ["a", "one", "b", "two"]);
+    // Back to before "b": the next prompt starts a branch beside it.
+    let one = path
+        .iter()
+        .find(|e| texts(std::slice::from_ref(e)) == ["one"])
+        .unwrap()
+        .id
+        .clone();
+    s.branch(Some(one)).await.unwrap();
+    assert_eq!(texts(&s.path().await.unwrap()), ["a", "one"]);
+    let so_far: Vec<String> = s
+        .history_so_far()
+        .await
+        .unwrap()
+        .iter()
+        .map(Message::text)
+        .collect();
+    assert_eq!(so_far, ["a", "one"]);
+    s.prompt("c").await.unwrap().wait().await.unwrap();
+    assert_eq!(texts(&s.path().await.unwrap()), ["a", "one", "c", "three"]);
+    assert_eq!(
+        texts(&s.entries().await.unwrap()).len(),
+        6,
+        "the other branch stays in the session"
+    );
+}
+
+#[tokio::test]
+async fn what_is_recorded_so_far_is_read_while_a_turn_runs() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let g = gate.clone();
+    let wait = Tool::new("wait", "waits").run_json(json!({"type":"object"}), move |_, _| {
+        let g = g.clone();
+        async move {
+            g.notified().await;
+            Ok("waited")
+        }
+    });
+    let p = ScriptedProvider::new().call("wait", json!({})).text("done");
+    let store = mem();
+    let rt = runtime(&p, store.clone());
+    let s = rt.session(&Agent::new("x").tool(wait), SessionId::new());
+    let mut turn = s.prompt("go").await.unwrap();
+    while let Some(e) = turn.next_event().await {
+        if matches!(e, Event::ActionStarted { .. }) {
+            // `history` would wait for the turn; this reads what the store has now.
+            let so_far = s.history_so_far().await.unwrap();
+            assert_eq!(so_far[0].text(), "go");
+            assert_eq!(so_far.len(), 2, "the prompt and the call");
+            gate.notify_one();
+        }
+    }
+    turn.wait().await.unwrap();
+    // A handle on another runtime, never used, reads the session from its last entry.
+    let other = runtime(&ScriptedProvider::new(), store);
+    let texts: Vec<String> = other
+        .session(&Agent::new("x"), s.id().clone())
+        .history_so_far()
+        .await
+        .unwrap()
+        .iter()
+        .map(Message::text)
+        .collect();
+    assert_eq!(texts.last().unwrap(), "done");
+}
+
+#[tokio::test]
+async fn the_status_tells_what_the_session_recorded_from_what_it_inherits() {
+    let p = ScriptedProvider::new().text("one").text("two");
+    let store = mem();
+    let rt = runtime(&p, store.clone());
+    let agent = Agent::new("x").model("m").reasoning(Effort::Low);
+    let s = rt.session(&agent, SessionId::new());
+    s.prompt("a").await.unwrap().wait().await.unwrap();
+    let status = s.status();
+    assert_eq!(status.model.as_deref(), Some("m"));
+    assert_eq!(status.reasoning, Some(Effort::Low));
+    assert_eq!(
+        (status.session_model, status.session_reasoning),
+        (None, None)
+    );
+
+    s.set_model("n").await.unwrap();
+    s.set_reasoning(Effort::High).await.unwrap();
+    // Resumed elsewhere, the session's own choice is what it reports and uses.
+    let other = runtime(&p, store);
+    let again = other.session(&agent, s.id().clone());
+    again.history().await.unwrap();
+    let status = again.status();
+    assert_eq!(status.session_model.as_deref(), Some("n"));
+    assert_eq!(status.session_reasoning, Some(Effort::High));
+    assert_eq!(status.model.as_deref(), Some("n"));
+    again.prompt("b").await.unwrap().wait().await.unwrap();
+    let last = p.requests().last().unwrap().clone();
+    assert_eq!(
+        (last.model.as_str(), last.reasoning),
+        ("n", Some(Effort::High))
+    );
+}
+
+#[test]
+fn an_agent_can_be_rebuilt_with_other_instructions_and_tools() {
+    let tool = |name: &str, about: &str| {
+        Tool::new(name, about).run_json(json!({"type": "object"}), |_, _| async { Ok("x") })
+    };
+    let agent = Agent::new("old")
+        .tool(tool("a", "First."))
+        .tool(tool("b", "B."));
+    let agent = agent
+        .with_instructions("new")
+        .with_tool(tool("a", "Second."))
+        .with_tool(tool("c", "C."))
+        .without_tool("b");
+    assert_eq!(agent.instructions(), "new");
+    let tools: Vec<(&str, &str)> = agent
+        .tool_list()
+        .iter()
+        .map(|t| (t.name(), t.spec().description.as_str()))
+        .collect();
+    assert_eq!(tools, [("a", "Second."), ("c", "C.")]);
 }

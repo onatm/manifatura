@@ -38,7 +38,7 @@ mod types;
 pub use agent::Agent;
 pub use compact::{CompactCx, CompactPlan, CompactReport, Compactor};
 pub use context::estimate_tokens;
-pub use env::{DirEntry, Env, ExecSpec, FileKind, Process, Stat};
+pub use env::{DirEntry, Env, ExecSpec, FileKind, Process, ProcessInput, Stat, TtySize};
 pub use event::{Event, Outcome};
 pub use hook::HookEvent;
 pub use hooks::{HookCx, Hooks};
@@ -52,8 +52,9 @@ pub use tool::{
     IntoToolResult, Json, Tool, ToolBuilder, ToolCx, ToolError, ToolHandler, ToolResult, schema_for,
 };
 pub use types::{
-    Content, Effort, ErrorKind, Message, ModelInfo, ModelRequest, ProviderError, Response, Role,
-    StopReason, StreamEvent, ToolCall, ToolChoice, ToolSpec, Usage, system_note_text,
+    Content, Effort, ErrorKind, Grammar, GrammarSyntax, Message, ModelInfo, ModelRequest, Phase,
+    ProviderError, Response, Role, StopReason, StreamEvent, TEXT_INPUT, ToolCall, ToolChoice,
+    ToolFormat, ToolSpec, Usage, system_note_text, text_input_schema,
 };
 
 pub use async_trait::async_trait;

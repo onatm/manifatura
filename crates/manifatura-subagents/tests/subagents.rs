@@ -190,9 +190,7 @@ async fn a_child_that_runs_out_of_steps_reports_what_it_had() {
         )
         .respond(testing::reply(
             vec![
-                Content::Text {
-                    text: "Halfway there.".into(),
-                },
+                Content::text("Halfway there."),
                 Content::ToolCall {
                     id: "c".into(),
                     name: "grant".into(),
@@ -318,14 +316,7 @@ async fn aborting_the_parent_aborts_the_child() {
     let provider = ScriptedProvider::new()
         .call(TASK_TOOL, json!({"agent": "explore", "prompt": "Wait"}))
         .call("wait", json!({}))
-        .fallback(|_| {
-            testing::reply(
-                vec![Content::Text {
-                    text: "late".into(),
-                }],
-                StopReason::Stop,
-            )
-        });
+        .fallback(|_| testing::reply(vec![Content::text("late")], StopReason::Stop));
     let wait = Tool::new("wait", "Waits until aborted.").run_json(
         json!({"type": "object"}),
         |_input: Value, cx: ToolCx| async move {
@@ -499,4 +490,100 @@ fn tools_are_read_as_a_list_or_as_text() {
             .tools,
         None
     );
+}
+
+#[tokio::test]
+async fn a_child_runs_on_its_parents_model_or_its_own_and_stops_at_the_default_limit() {
+    let mut provider =
+        ScriptedProvider::new().call(TASK_TOOL, json!({"agent": "explore", "prompt": "Look"}));
+    for _ in 0..3 {
+        provider = provider.call("grant", json!({}));
+    }
+    let provider = provider.text("Found it.").text("Done.");
+    let agent = Agent::new("x").model("base").tools([
+        grant(),
+        Subagents::new([explore()]).default_max_steps(3).tool(),
+    ]);
+    let rt = Runtime::builder().provider(provider.clone()).build();
+    let session = rt.session(&agent, SessionId::from("top"));
+    // The parent session switched model and effort; its child follows.
+    session.set_model("chosen").await.unwrap();
+    session.set_reasoning(Effort::High).await.unwrap();
+    session.prompt("Go").await.unwrap().wait().await.unwrap();
+    let child = &provider.requests()[1..4];
+    assert!(
+        child
+            .iter()
+            .all(|r| r.model == "chosen" && r.reasoning == Some(Effort::High))
+    );
+    // No limit of its own: the default's last step is for the report.
+    assert_eq!(child[2].tool_choice, ToolChoice::Off);
+
+    // One that names a model and an effort runs on them.
+    let provider = ScriptedProvider::new()
+        .call(TASK_TOOL, json!({"agent": "explore", "prompt": "Look"}))
+        .text("Found it.")
+        .text("Done.");
+    let sub = explore().model("small").effort(Effort::Low);
+    let agent = Agent::new("x")
+        .model("base")
+        .tools([Subagents::new([sub]).tool()]);
+    let rt = Runtime::builder().provider(provider.clone()).build();
+    let session = rt.session(&agent, SessionId::from("top"));
+    session.prompt("Go").await.unwrap().wait().await.unwrap();
+    let child = &provider.requests()[1];
+    assert_eq!(
+        (child.model.as_str(), child.reasoning),
+        ("small", Some(Effort::Low))
+    );
+}
+
+#[tokio::test]
+async fn tool_patterns_allow_mcp_tools_and_deferred_ones_run_through_run_tool() {
+    let provider = ScriptedProvider::new()
+        .call(TASK_TOOL, json!({"agent": "explore", "prompt": "Look"}))
+        .calls(&[
+            ("mcp__exa__search", json!({})),
+            ("run_tool", json!({"name": "mcp__exa__fetch", "input": {}})),
+            ("run_tool", json!({"name": "mcp__gh__issue", "input": {}})),
+            ("find_tools", json!({"query": "exa"})),
+            ("grant", json!({})),
+        ])
+        .text("Looked.")
+        .text("Done.");
+    let echo = |name: &str| {
+        Tool::new(name, "Echoes.").run_json(
+            json!({"type": "object"}),
+            |_i: Value, _cx: ToolCx| async move { Ok::<_, ToolError>("ok".to_string()) },
+        )
+    };
+    let sub = explore().tools(["read", "mcp__exa__*"]);
+    let agent = Agent::new("x").tools([
+        grant(),
+        echo("mcp__exa__search"),
+        echo("run_tool"),
+        echo("find_tools"),
+        Subagents::new([sub]).tool(),
+    ]);
+    let rt = Runtime::builder().provider(provider.clone()).build();
+    let session = rt.session(&agent, SessionId::from("top"));
+    session.prompt("Go").await.unwrap().wait().await.unwrap();
+    let out = results(&provider.requests()[2].messages);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "ok", "an MCP tool the pattern names: {out}");
+    assert_eq!(lines[1], "ok", "the same, deferred");
+    assert!(lines[2].contains("may use only"), "another server's: {out}");
+    assert_eq!(lines[3], "ok", "find_tools comes with MCP patterns");
+    assert!(lines[4].contains("may use only"), "{out}");
+}
+
+#[test]
+fn a_definition_may_name_a_model_and_an_effort() {
+    let def = Definition::parse("---\nname: a\ndescription: x\nmodel: small\neffort: low\n---\n")
+        .unwrap();
+    assert_eq!(
+        (def.model.as_deref(), def.effort),
+        (Some("small"), Some(Effort::Low))
+    );
+    assert!(Definition::parse("---\nname: a\ndescription: x\neffort: lots\n---\n").is_err());
 }

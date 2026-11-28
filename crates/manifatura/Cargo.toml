@@ -13,22 +13,33 @@ readme = "../../README.md"
 documentation = "https://docs.rs/manifatura"
 
 [features]
-default = ["kit", "models-openai", "skills", "store-jsonl", "tools"]
+default = ["kit", "providers-openai", "skills", "store-jsonl", "tools"]
 kit = ["dep:manifatura-kit"]
-models-openai = ["dep:manifatura-models", "manifatura-models/openai"]
+providers-openai = ["dep:manifatura-providers", "manifatura-providers/openai"]
+providers-responses = ["dep:manifatura-providers", "manifatura-providers/responses"]
 store-jsonl = ["dep:manifatura-store"]
 tools = ["dep:manifatura-tools"]
 mcp = ["dep:manifatura-mcp"]
 skills = ["dep:manifatura-skills"]
 subagents = ["dep:manifatura-subagents"]
+auth = ["dep:manifatura-auth", "providers-responses"]
+exec = ["dep:manifatura-exec", "manifatura-tools?/pty"]
+sandbox = ["dep:manifatura-sandbox"]
+policy = ["dep:manifatura-policy", "kit"]
+snapshots = ["dep:manifatura-snapshots"]
 testing = ["manifatura-agent/testing"]
 
 [dependencies]
 manifatura-agent.workspace = true
+manifatura-auth = { workspace = true, optional = true }
+manifatura-exec = { workspace = true, optional = true }
 manifatura-kit = { workspace = true, optional = true }
 manifatura-mcp = { workspace = true, optional = true }
-manifatura-models = { workspace = true, optional = true }
+manifatura-policy = { workspace = true, optional = true }
+manifatura-providers = { workspace = true, optional = true }
+manifatura-sandbox = { workspace = true, optional = true }
 manifatura-skills = { workspace = true, optional = true }
+manifatura-snapshots = { workspace = true, optional = true }
 manifatura-store = { workspace = true, optional = true }
 manifatura-subagents = { workspace = true, optional = true }
 manifatura-tools = { workspace = true, optional = true }

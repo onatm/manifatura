@@ -1,0 +1,28 @@
+[package]
+name = "manifatura-policy"
+description = "Approval policy for manifatura: allow, ask and deny rules for tools and shell command prefixes, with commands split by tree-sitter-bash."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/manifatura-policy"
+
+[dependencies]
+manifatura-agent.workspace = true
+manifatura-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tree-sitter = "0.27.2"
+tree-sitter-bash = "0.25.1"
+
+[dev-dependencies]
+manifatura-agent = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

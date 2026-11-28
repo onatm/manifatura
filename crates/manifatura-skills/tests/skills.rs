@@ -10,7 +10,7 @@ use manifatura_agent::testing::ScriptedProvider;
 use manifatura_agent::*;
 use manifatura_kit::compaction;
 use manifatura_kit::context::SystemPrompt;
-use manifatura_skills::{SKILL_TOOL, Skill, SkillSet, Skills, Source, SystemPromptExt};
+use manifatura_skills::{SKILL_TOOL, Skill, SkillSet, Skills, Source, SystemPromptExt, Visibility};
 use serde_json::json;
 
 /// Files by absolute path; every ancestor of a file is a directory. A path ending in `/` is an
@@ -284,6 +284,43 @@ async fn the_tool_offers_only_known_names_and_the_prompt_lists_them() {
             .build(),
         "Base.\n"
     );
+}
+
+#[tokio::test]
+async fn visibility_decides_what_the_model_and_the_user_see() {
+    let set = SkillSet::of([
+        builtin("a", "All of it."),
+        builtin("b", "Name only."),
+        builtin("c", "The user's."),
+        builtin("d", "Hidden."),
+    ])
+    .with_visibility(BTreeMap::from([
+        ("b".to_string(), Visibility::NameOnly),
+        ("c".to_string(), Visibility::UserOnly),
+        ("d".to_string(), Visibility::Off),
+    ]));
+    assert_eq!(
+        set.section(),
+        "# Skills\n\nLoad these with the skill tool:\n\n- a: All of it.\n- b\n"
+    );
+    let tool = set.tool().unwrap();
+    assert_eq!(
+        tool.spec().input_schema["properties"]["name"]["enum"],
+        json!(["a", "b"])
+    );
+    let refused = tool.call(json!({"name": "c"}), ToolCx::detached("1")).await;
+    assert!(
+        refused.is_error && refused.output.contains("the skills are: a, b"),
+        "{refused:?}"
+    );
+    let user: Vec<&str> = set.for_user().map(|s| s.name.as_str()).collect();
+    assert_eq!(user, ["a", "b", "c"]);
+    assert_eq!(Visibility::Off.next(), Visibility::On);
+    assert!(SkillSet::catalog_tokens(set.get("a").unwrap()) > 0);
+    // Nothing the model may load: no tool, no section.
+    let hidden = SkillSet::of([builtin("a", "x")])
+        .with_visibility(BTreeMap::from([("a".to_string(), Visibility::UserOnly)]));
+    assert!(hidden.tool().is_none() && hidden.section().is_empty());
 }
 
 #[tokio::test]

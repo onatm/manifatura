@@ -138,6 +138,29 @@ impl Agent {
     pub fn tool_list(&self) -> &[Tool] {
         &self.tools
     }
+
+    /// The same agent with other instructions, e.g. rebuilt after the app's catalog changed.
+    /// Sessions already open keep the agent they were opened with.
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = instructions.into();
+        self
+    }
+
+    /// The same agent with `tool` in place of the one of the same name, or added.
+    pub fn with_tool(mut self, tool: impl AsRef<Tool>) -> Self {
+        let tool = tool.as_ref().clone();
+        match self.tools.iter_mut().find(|t| t.name() == tool.name()) {
+            Some(have) => *have = tool,
+            None => self.tools.push(tool),
+        }
+        self
+    }
+
+    /// The same agent without the tool called `name`.
+    pub fn without_tool(mut self, name: &str) -> Self {
+        self.tools.retain(|t| t.name() != name);
+        self
+    }
 }
 
 impl std::fmt::Debug for Agent {

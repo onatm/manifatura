@@ -45,9 +45,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use manifatura_agent::{
-    Abort, Agent, Entry, Error, Event, Hooks, Message, Record, Role, Runtime, Session, SessionId,
-    Tool, ToolChoice, ToolCx, ToolHandler, ToolResult, ToolSpec, hook, new_id,
+    Abort, Agent, Effort, Entry, Error, Event, Hooks, Message, Record, Role, Runtime, Session,
+    SessionId, Tool, ToolChoice, ToolCx, ToolHandler, ToolResult, ToolSpec, hook, new_id,
 };
+use manifatura_kit::{CALL_TOOL, SEARCH_TOOL};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -65,6 +66,10 @@ pub const DEPTH_KEY: &str = "subagents.depth";
 /// which subagent they run in (e.g. to allow it only some tools).
 pub const AGENT_KEY: &str = "subagents.agent";
 
+/// The most model calls a subagent makes when it sets no limit of its own: enough for a
+/// thorough search or a focused change, and a bound on a child that loses its way.
+pub const DEFAULT_MAX_STEPS: usize = 50;
+
 /// The default limit for a subagent's report, in bytes.
 pub const DEFAULT_MAX_RESULT_BYTES: usize = 16 * 1024;
 
@@ -77,6 +82,8 @@ pub struct Subagent {
     brief: Option<String>,
     max_steps: Option<usize>,
     tools: Option<Vec<String>>,
+    model: Option<String>,
+    effort: Option<Effort>,
 }
 
 impl Subagent {
@@ -99,7 +106,23 @@ impl Subagent {
             brief: None,
             max_steps: None,
             tools: None,
+            model: None,
+            effort: None,
         }
+    }
+
+    /// The model the child runs on. Unset, a child like its parent runs on the model its
+    /// parent session uses now.
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// The reasoning effort the child runs at. Unset, a child like its parent reasons as its
+    /// parent session does now.
+    pub fn effort(mut self, effort: Effort) -> Self {
+        self.effort = Some(effort);
+        self
     }
 
     /// Text sent before the task in the child's first prompt: its role, how to work, what to
@@ -110,7 +133,8 @@ impl Subagent {
         self
     }
 
-    /// The most model calls the child makes (see [`Agent::max_steps`]), the last of them for its
+    /// The most model calls the child makes (default [`DEFAULT_MAX_STEPS`], or
+    /// [`Subagents::default_max_steps`]; see [`Agent::max_steps`]), the last of them for its
     /// report: from halfway on, each request tells the child which step it is on, and on the
     /// last one it may not call tools ([`ToolChoice::Off`]) and is asked to write its reply
     /// from what it has found.
@@ -119,7 +143,9 @@ impl Subagent {
         self
     }
 
-    /// The only tools the child may call, by the names the model calls them. Calls to any other
+    /// The only tools the child may call, by the names the model calls them; a `*` matches any
+    /// run of characters, as in `mcp__github__*`. A deferred tool called through `run_tool`
+    /// counts as itself, and `find_tools` is allowed when a pattern names MCP tools. Calls to any other
     /// tool are refused before other hooks see them, so nobody is asked to approve them. The
     /// child is still offered all of its agent's tools, so a child like its parent keeps the
     /// parent's prompt; to keep the others out of its prompt too, give an agent of its own
@@ -130,14 +156,41 @@ impl Subagent {
     }
 
     /// A subagent like its parent from a [`Definition`]: its body becomes the brief, and its
-    /// `max_steps` and `tools` apply.
+    /// `max_steps`, `tools`, `model` and `effort` apply.
     pub fn from_definition(def: Definition) -> Self {
         let mut sub = Self::like_parent(def.name, def.description).brief(def.body);
         if let Some(n) = def.max_steps {
             sub = sub.max_steps(n);
         }
         sub.tools = def.tools;
+        sub.model = def.model;
+        sub.effort = def.effort;
         sub
+    }
+
+    /// The same subagent with these tools, model or effort, where they are given: for settings kept apart from the
+    /// definition, such as an app's config.
+    pub fn with(
+        mut self,
+        tools: Option<Vec<String>>,
+        model: Option<String>,
+        effort: Option<Effort>,
+    ) -> Self {
+        if tools.is_some() {
+            self.tools = tools;
+        }
+        if model.is_some() {
+            self.model = model;
+        }
+        if effort.is_some() {
+            self.effort = effort;
+        }
+        self
+    }
+
+    /// The tools it may call, when it is limited to some.
+    pub fn allowed_tools(&self) -> Option<&[String]> {
+        self.tools.as_deref()
     }
 
     /// The name the parent calls it by.
@@ -174,6 +227,10 @@ pub struct Definition {
     pub max_steps: Option<usize>,
     /// The only tools the child may call; `None` allows all of them.
     pub tools: Option<Vec<String>>,
+    /// The model it runs on; `None` is its parent's.
+    pub model: Option<String>,
+    /// The effort it runs at; `None` is its parent's.
+    pub effort: Option<Effort>,
     /// The Markdown after the frontmatter.
     pub body: String,
 }
@@ -185,6 +242,8 @@ struct Frontmatter {
     description: String,
     max_steps: Option<usize>,
     tools: Option<Names>,
+    model: Option<String>,
+    effort: Option<String>,
 }
 
 /// Tool names as a YAML list or as one string, separated by commas or spaces.
@@ -235,11 +294,19 @@ impl Definition {
         if front.description.trim().is_empty() {
             return Err("the frontmatter has no description".into());
         }
+        let effort = match front.effort.as_deref() {
+            Some(text) => Some(Effort::parse(text).ok_or_else(|| {
+                format!("the effort {text:?} should be off, low, medium, high, xhigh, max or ultra")
+            })?),
+            None => None,
+        };
         Ok(Definition {
             name,
             description: front.description.trim().to_string(),
             max_steps: front.max_steps,
             tools: front.tools.map(Names::into_vec),
+            model: front.model.filter(|m| !m.trim().is_empty()),
+            effort,
             body: body.to_string(),
         })
     }
@@ -272,6 +339,7 @@ pub struct Subagents {
     share: Vec<String>,
     sequential: bool,
     observer: Option<Observer>,
+    default_max_steps: usize,
 }
 
 impl std::fmt::Debug for Subagents {
@@ -296,7 +364,19 @@ impl Subagents {
             share: vec![manifatura_kit::approval_key("")],
             sequential: false,
             observer: None,
+            default_max_steps: DEFAULT_MAX_STEPS,
         }
+    }
+
+    /// The most model calls of a subagent that sets no limit (default [`DEFAULT_MAX_STEPS`]).
+    pub fn default_max_steps(mut self, n: usize) -> Self {
+        self.default_max_steps = n.max(1);
+        self
+    }
+
+    /// The subagents, in order.
+    pub fn list(&self) -> &[Subagent] {
+        &self.list
     }
 
     /// How deep subagents nest: at depth `n` a task call is refused. 1, the default, lets only
@@ -345,10 +425,10 @@ impl Subagents {
             description.push_str(&format!("\n- {}: {}", s.name, s.description));
         }
         let names: Vec<&str> = self.list.iter().map(|s| s.name.as_str()).collect();
-        let spec = ToolSpec {
-            name: TASK_TOOL.into(),
+        let spec = ToolSpec::new(
+            TASK_TOOL,
             description,
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "properties": {
                     "agent": { "type": "string", "enum": names, "description": "The subagent." },
@@ -360,7 +440,7 @@ impl Subagents {
                 },
                 "required": ["agent", "prompt"]
             }),
-        };
+        );
         let sequential = self.sequential;
         Tool::from_handler(spec, Task(Arc::new(self.clone())))
             .with_sequential(sequential)
@@ -393,10 +473,16 @@ impl ToolHandler for Task {
         let Some(prompt) = input["prompt"].as_str().filter(|p| !p.trim().is_empty()) else {
             return ToolResult::error("missing `prompt`: the complete task");
         };
+        let status = cx
+            .runtime()
+            .session(cx.agent(), cx.session_id().clone())
+            .status();
         let origin = Origin {
             runtime: cx.runtime().clone(),
             session: cx.session_id().clone(),
             agent: cx.agent().clone(),
+            model: status.model,
+            effort: status.reasoning,
             call_id: cx.call_id().to_string(),
             state: cx.state_map(),
             abort: cx.abort().clone(),
@@ -416,6 +502,9 @@ struct Origin<'a> {
     runtime: Runtime,
     session: SessionId,
     agent: Agent,
+    /// What the parent session runs on now.
+    model: Option<String>,
+    effort: Option<Effort>,
     call_id: String,
     state: BTreeMap<String, Value>,
     abort: Abort,
@@ -448,6 +537,8 @@ impl Subagents {
             runtime: parent.runtime(),
             session: parent.id().clone(),
             agent: parent.agent().clone(),
+            model: parent.status().model,
+            effort: parent.status().reasoning,
             call_id: format!("run-{}", &new_id()[..8]),
             state,
             abort: abort.clone(),
@@ -491,11 +582,29 @@ impl Subagents {
             );
         }
 
-        let mut agent = sub.agent.clone().unwrap_or(origin.agent);
+        // A child like its parent runs on what its parent session runs on now, unless it says.
+        let mut agent = match &sub.agent {
+            Some(agent) => agent.clone(),
+            None => {
+                let mut agent = origin.agent;
+                if let Some(model) = origin.model {
+                    agent = agent.model(model);
+                }
+                if let Some(effort) = origin.effort {
+                    agent = agent.reasoning(effort);
+                }
+                agent
+            }
+        };
         agent = agent.name(sub.name.clone());
-        if let Some(n) = sub.max_steps {
-            agent = agent.max_steps(n).hooks(budget(n));
+        if let Some(model) = &sub.model {
+            agent = agent.model(model.clone());
         }
+        if let Some(effort) = sub.effort {
+            agent = agent.reasoning(effort);
+        }
+        let n = sub.max_steps.unwrap_or(self.default_max_steps);
+        agent = agent.max_steps(n).hooks(budget(n));
         if let Some(tools) = &sub.tools {
             agent = agent.hooks_first(only(&sub.name, tools));
         }
@@ -640,13 +749,41 @@ fn only(name: &str, allowed: &[String]) -> Hooks {
         allowed.join(", ")
     );
     let allowed = allowed.to_vec();
+    let mcp = allowed.iter().any(|p| p.starts_with("mcp__"));
     Hooks::new().on(move |e: hook::ToolCall, _cx| {
-        let decision = match allowed.contains(&e.call.name) {
+        let name = e.call.name.as_str();
+        // A deferred tool runs through `run_tool`; it counts as the tool it runs.
+        let target = match name {
+            CALL_TOOL => e.call.input["name"].as_str().unwrap_or_default(),
+            _ => name,
+        };
+        let ok = allowed.iter().any(|p| matches_pattern(p, target)) || (mcp && name == SEARCH_TOOL);
+        let decision = match ok {
             true => hook::Decision::Run(e),
             false => hook::Decision::Deny(refusal.clone()),
         };
         async move { decision }
     })
+}
+
+/// Whether `name` matches `pattern`, where `*` stands for any run of characters.
+fn matches_pattern(pattern: &str, name: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = name.strip_prefix(first) else {
+        return false;
+    };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else {
+        return rest.is_empty();
+    };
+    for part in middle {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
 }
 
 /// A child's tool call as one line: the tool and its input, cut to 200 characters.

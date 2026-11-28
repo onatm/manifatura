@@ -9,12 +9,18 @@
 //! | Feature | Module |
 //! | --- | --- |
 //! | `kit` (default) | [`kit`]: hook bundles (compaction, approvals, catalog, input repair, system delta) |
-//! | `models-openai` (default) | [`models`]: llama.cpp and other OpenAI-compatible servers |
+//! | `providers-openai` (default) | [`providers`]: llama.cpp and other OpenAI-compatible servers (Chat Completions) |
+//! | `providers-responses` | [`providers::responses`]: OpenAI's Responses API, with pluggable credentials |
 //! | `store-jsonl` (default) | [`store`] |
 //! | `tools` (default) | [`tools`]: `read`, `edit`, `grep`, `glob`, `bash` and [`tools::Local`], the env on this machine |
 //! | `skills` (default) | [`skills`]: [Agent Skills](https://agentskills.io), a catalog for the prompt and a `skill` tool |
 //! | `subagents` | [`subagents`]: a `task` tool that hands a self-contained task to a subagent |
 //! | `mcp` | [`mcp`]: MCP servers' tools, over stdio or HTTP |
+//! | `exec` | [`exec`]: `exec_command` and `write_stdin`, commands that keep running in the background (with `tools`, terminals for `tools::Local`) |
+//! | `policy` | [`policy`]: allow, ask and deny rules for tools and shell command prefixes, asking through [`kit::Approvals`] |
+//! | `snapshots` | [`snapshots`]: the files as each turn found them, in a git repository of their own, to restore later |
+//! | `sandbox` | [`sandbox`]: an env whose commands run in a sandbox (macOS Seatbelt, Linux bubblewrap), writing only to the workspace, without the network |
+//! | `auth` | [`auth`]: signing in to a model vendor, such as OpenAI's Sign in with ChatGPT for the user's plan |
 //! | `testing` | `testing`: a scripted provider for tests |
 //!
 //! [`prelude`] holds the names most programs use, following the features.
@@ -27,8 +33,8 @@ pub use manifatura_agent::*;
 #[cfg(feature = "kit")]
 pub use manifatura_kit as kit;
 
-#[cfg(feature = "models-openai")]
-pub use manifatura_models as models;
+#[cfg(any(feature = "providers-openai", feature = "providers-responses"))]
+pub use manifatura_providers as providers;
 
 #[cfg(feature = "store-jsonl")]
 pub use manifatura_store as store;
@@ -44,6 +50,21 @@ pub use manifatura_skills as skills;
 
 #[cfg(feature = "subagents")]
 pub use manifatura_subagents as subagents;
+
+#[cfg(feature = "auth")]
+pub use manifatura_auth as auth;
+
+#[cfg(feature = "exec")]
+pub use manifatura_exec as exec;
+
+#[cfg(feature = "sandbox")]
+pub use manifatura_sandbox as sandbox;
+
+#[cfg(feature = "policy")]
+pub use manifatura_policy as policy;
+
+#[cfg(feature = "snapshots")]
+pub use manifatura_snapshots as snapshots;
 
 pub use schemars;
 pub use serde_json;

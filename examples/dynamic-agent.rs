@@ -9,7 +9,7 @@
 use std::io::Write;
 
 use manifatura::store::JsonlStore;
-use manifatura::{Agent, Event, Runtime, SessionId, Tool, hook, models};
+use manifatura::{Agent, Event, Runtime, SessionId, Tool, hook, providers};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let id = SessionId::new();
     let path = store.path(&id);
     let rt = Runtime::builder()
-        .provider(models::from_env()?)
+        .provider(providers::from_env()?)
         .store(store)
         .build();
 

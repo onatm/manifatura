@@ -26,19 +26,18 @@ tools.push(Subagents::new([reviewer, worker]).tool());
 
 `Subagent::like_parent` runs the session's own agent: the same instructions, tools, model settings and hooks. Its requests then start with the same system prompt and tool declarations as the parent's, so a provider that caches processed prompts serves the child from the parent's cache, and the child's approvals, compaction and other hooks work as they do for the parent. The brief tells it what its role is; it goes before the task in the child's first message.
 
-A subagent can also be written as Markdown, the same way as a [skill](skills.md): frontmatter with a `name`, a `description` and optionally `max_steps` and `tools`, then the brief.
+A subagent can also be written as Markdown, the same way as a [skill](skills.md): frontmatter with a `name`, a `description` and optionally `tools`, `model`, `effort` and `max_steps`, then the brief.
 
 ```markdown
 ---
 name: explore
 description: Answers one question about the code by searching and reading it.
 tools: read, grep, glob
-max_steps: 20
 ---
 You are exploring the code for another agent. Report what you found with path:line.
 ```
 
-`tools` is a list or one line of names separated by commas.
+`tools` is a list or one line of names separated by commas. `model` and `effort` choose what the child runs on; without them, a child like its parent runs on the model and effort its parent session uses at the time, including a change made with `Session::set_model` or `set_reasoning`. `Subagent::with` applies such settings kept elsewhere, such as an app's config.
 
 ```rust
 let def = manifatura::subagents::Definition::parse(include_str!("agents/explore.md"))?;
@@ -88,11 +87,11 @@ let explore = Subagent::like_parent("explore", "Answers one question about the c
     .tools(["read", "grep", "glob"]);
 ```
 
-A call to any other tool is refused, and the model is told which it may use. The refusal comes first among the child's hooks, so an approval hook never asks about a call that will be refused. The child is still offered all of its agent's tools: a child like its parent keeps the parent's prompt, and with it the prompt cache. To keep the other tools out of the prompt as well, give an agent of its own (`Subagent::new`) only these. A deferred tool run through `run_tool` is called `run_tool`.
+A call to any other tool is refused, and the model is told which it may use. The refusal comes first among the child's hooks, so an approval hook never asks about a call that will be refused. The child is still offered all of its agent's tools: a child like its parent keeps the parent's prompt, and with it the prompt cache. To keep the other tools out of the prompt as well, give an agent of its own (`Subagent::new`) only these. A `*` in a name matches any run of characters, so `mcp__github__*` allows one server's tools. A deferred tool run through `run_tool` counts as the tool it runs, and `find_tools` is allowed whenever a name starts with `mcp__`.
 
 ## Step limits
 
-`Subagent::max_steps(n)` caps the child's model calls, and keeps the last of them for its reply:
+Every child's model calls are capped, at 50 by default (`DEFAULT_MAX_STEPS`; `Subagents::default_max_steps` changes it, `Subagent::max_steps(n)` sets one child's), and the last of them is kept for its reply:
 
 - From halfway on, each request ends with a note saying which step it is (`Step 11 of 20. Keep the last step for your reply.`).
 - On step `n` the request asks for no tool calls (`ToolChoice::Off`), with the tools still declared, and ends with a note telling the child to write its reply from what it has found and say what it did not get to.

@@ -40,6 +40,20 @@ let lookup = Tool::new("lookup_order", "Look up one order by id.")
 
 A finished `Tool` is a cheap handle: clone it into several agents.
 
+### Text tools
+
+Some input is text, not JSON: a patch, a script, a query. `run_text` makes a tool whose input the model writes as free text, and `grammar` can constrain it:
+
+```rust
+use manifatura::{Grammar, Tool};
+
+let sql = Tool::new("query", "Run one read-only SQL query.")
+    .grammar(Grammar::lark(r#"start: "SELECT " /[^;]+/"#))
+    .run_text(|sql: String, _cx| async move { run_query(&sql).await });
+```
+
+OpenAI's Responses API offers it as a free-form tool: the model writes the text raw, and follows the grammar while it writes. Other providers offer an object with one string field, `input`, so the tool works with any model. Either way, hooks see the call as `{"input": "…"}`, and the closure gets the text. The grammar shapes what the model writes but is not checked again: a tool still checks its input. `Grammar::regex` takes a regular expression instead of Lark.
+
 ### A tool from a program
 
 `ScriptTool` makes a tool of any executable and a JSON Schema. The input arrives on the program's stdin as JSON, its stdout is the result, and a non-zero exit is an error that includes stderr. It runs through the env, like `bash`:
@@ -78,14 +92,14 @@ A tool that needs a person (a confirmation, a choice) gets a handle to the app's
 | --- | --- |
 | `.sequential()` | Never runs alongside other calls of the same batch. Calls run in parallel otherwise. |
 | `.deferred()` | Not offered to the model, but runs when a call names it (see the catalog below). |
-| `.keep_results()` | Its results stay relevant for the rest of the task, so `kit::compaction::trim_results` leaves them whole (the `skill` tool of [skills](skills.md) does this). |
+| `.keep_results()` | Its results stay relevant for the rest of the task, so `kit::compaction::drop_old_results` and `trim_results` leave them whole (the `skill` tool of [skills](skills.md) does this). |
 | `.guideline(text)` | A line for the system prompt on when and how to use the tool (see [system prompts](system-prompts.md)). |
 
 A tool returning `ToolResult::ok(text).terminate()` ends the turn after its batch, without another model call.
 
 ## The basic tools
 
-`manifatura::tools` has five tools, enough for a coding or operations agent:
+`manifatura::tools` has these tools, enough for a coding or operations agent:
 
 | Tool | What it does |
 | --- | --- |
@@ -93,14 +107,18 @@ A tool returning `ToolResult::ok(text).terminate()` ends the turn after its batc
 | `edit` | Exact text replacements in a file, or a new file from one edit with an empty `old_text`. |
 | `grep` | A regular expression across files, respecting `.gitignore`. |
 | `glob` | Files by pattern, newest first, respecting `.gitignore`. |
+| `apply_patch` | Adds, updates, moves and deletes files with one patch, in the format of OpenAI's Codex, which OpenAI's models are trained to write. Not in `tools::all()`: give it in place of `edit`. |
 | `bash` | A command in the workspace: builds, tests, git. One that runs longer than its wait (30 seconds by default) is left in the background, and its output goes to files the model can read. |
 
-`edit` refuses to change a file that changed since the model read it. Long output keeps its most useful part (the end of a command's output, the first matches of a search) and says where the rest is.
+`edit` refuses to change a file that changed since the model read it. `apply_patch` finds its place by the patch's context lines instead (exactly, then ignoring whitespace and typographic punctuation), checks the whole patch before writing any file, and writes nothing if any part fails. Long output keeps its most useful part (the end of a command's output, the first matches of a search) and says where the rest is.
 
 ```rust
 use manifatura::tools;
 
 let agent = Agent::new("You are a coding agent.").tools(tools::all()); // read, edit, grep, glob, bash
+
+let agent = Agent::new("You are a coding agent.") // for OpenAI's models
+    .tools(tools::by_name(&["read", "apply_patch", "grep", "glob", "bash"])?);
 
 let agent = Agent::new("You review code; you change nothing.")
     .tools(tools::by_name(&["read", "grep", "glob"])?);
@@ -116,10 +134,78 @@ Tools act through an `Env`: run a command, read, write, list and remove files. T
 let env = tools::Local::new("/srv/checkouts/shop")?
     .pass_env("GH_TOKEN")               // from this process's environment
     .set_env("CI", "true");
-let rt = Runtime::builder().provider(models::from_env()?).env(env).build();
+let rt = Runtime::builder().provider(providers::from_env()?).env(env).build();
 ```
 
 A sandbox, a container or a remote machine is another `Env` implementation; the tools do not change. Paths the model gives resolve against the env's working directory, and `Local` does not stop them leaving it: isolation belongs to the env.
+
+### A sandbox
+
+The `sandbox` feature (the `manifatura-sandbox` crate) wraps an env so that its commands run in a sandbox: macOS Seatbelt, or bubblewrap on Linux:
+
+```rust
+use manifatura::sandbox::Sandbox;
+
+let env = Sandbox::new(tools::Local::new(".")?)?
+    .protect(".myapp")          // read-only at the top of the workspace, beside .git and .agents
+    .allow_unsandboxed(true);   // commands may ask to run outside it (see below)
+let rt = Runtime::builder().provider(providers::from_env()?).env(env).build();
+```
+
+Sandboxed commands read anything but write only to the workspace, the env's scratch directory and `/tmp`, never to `.git` or `.agents` at the top of the workspace; they have no network beyond binding ports and talking to `localhost`. The env's own writes (the file tools') follow the same rules. `writable(path)` and `network(true)` widen it.
+
+| | macOS | Linux |
+| --- | --- | --- |
+| Backend | Seatbelt (`/usr/bin/sandbox-exec`) | bubblewrap (`bwrap` from `/usr/bin` or `/bin`), which needs user namespaces: on Ubuntu 24.04 and later, AppArmor restricts them unless allowed for `bwrap` |
+| `localhost` | The host's: a server started in the sandbox is reachable from a browser | The sandbox's own: a server started in it is reachable only from other commands in it |
+| A protected name that does not exist yet | Cannot be created | Can be created by a command (the env's own writes still refuse it) |
+
+`Sandbox::new` checks that the backend runs and says why when it does not. Elsewhere (Windows) it fails with `Unsupported`.
+
+A command whose `ExecSpec::unsandboxed` is set runs on the wrapped env, outside the sandbox, but only with `allow_unsandboxed(true)`; otherwise it is refused. `Exec::escalation` lets the model ask for that (below); ask the user before such a command runs.
+
+### What an env implements for commands
+
+- `exec(spec)` starts one, with its output going to the files `spec` names (`stdout` and `stderr` may be the same file, for both streams in order). `ExecSpec::tty` asks for a terminal of a given size; an env without terminals refuses it. `Local` has them with `manifatura-tools`' `pty` feature.
+- The returned `Process` waits, kills the command and everything it started, interrupts it (`SIGINT`; by default, a kill), and hands out its terminal's input once (`take_input`).
+- `read_range(path, offset, max)` and `read_tail(path, max)` read part of a file, so output is read where it is written, a piece at a time. The defaults read the whole file; an env on another machine implements them to send only the piece.
+
+## Commands that keep running
+
+`bash` waits for a command, and leaves one that takes too long in a job directory the model has to inspect itself. The `exec` feature (the `manifatura-exec` crate) has tools for commands that keep running, in the shapes OpenAI's models are trained on (those of OpenAI's Codex):
+
+```rust
+use manifatura::exec::Exec;
+
+let exec = Exec::new();
+let agent = Agent::new("You are a coding agent.")
+    .tools(tools::by_name(&["read", "apply_patch", "grep", "glob"])?)
+    .tools(exec.tools())  // exec_command, write_stdin
+    .hooks(exec.hooks()); // tells the model when a background command exits
+```
+
+| Tool | What it does |
+| --- | --- |
+| `exec_command` | Runs `cmd` (with `workdir`, and `tty: true` for a terminal) and returns its output when it exits, or after `yield_time_ms` (10 s by default) with a session ID, leaving it running. |
+| `write_stdin` | Types `chars` into a session's terminal, or with empty `chars` waits for more output (at least 5 s, until it exits); `"\u0003"` interrupts it. Returns only the output the model has not seen. |
+
+Each result says how long the call took, whether the command exited (with its code) or still runs (with its session ID), and the output, stdout and stderr together. Output past `max_output_tokens` (10,000 by default) keeps its beginning and end. Commands get `NO_COLOR=1`, `PAGER=cat` and `GIT_PAGER=cat` (and `TERM=dumb` outside a terminal), so nothing waits for a pager.
+
+Sessions belong to the manifatura session that started them. A command whose exit the model has read is forgotten; one that exits while the model is busy elsewhere is reported in a note before its next model call, by the `Step` hook from `Exec::hooks`. Each session keeps 64 commands at most (`Exec::max_processes`); starting another drops the least recently used, finished ones first, and kills it if it still runs. An abort during `exec_command` kills that command; dropping the last handle to the `Exec` kills them all.
+
+In a sandbox, `Exec::escalation(true)` lets the model ask to run a command outside it, as OpenAI's models are trained to: `exec_command` gets `sandbox_permissions` (`"use_default"` or `"require_escalated"`) and a `justification`, which an escalated call must give. Such a call runs with `ExecSpec::unsandboxed`, so put an approval hook in front of it; `manifatura::exec::is_escalation` picks those calls out:
+
+```rust
+let exec = Exec::new().escalation(true);
+let agent = Agent::new("…")
+    .tools(exec.tools())
+    .hooks(exec.hooks())
+    .hooks(kit::approve_when(manifatura::exec::is_escalation, ask_the_user));
+```
+
+A sandboxed command that fails the way a sandbox makes commands fail ("Operation not permitted", no route to a host) ends with a hint saying how to ask.
+
+For an app, `Exec::subscribe` streams every start and exit, `Exec::processes(session)` lists what a session keeps, and `Exec::kill(session, id)` stops one.
 
 ## MCP servers
 

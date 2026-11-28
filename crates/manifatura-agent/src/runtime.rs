@@ -246,6 +246,7 @@ fn open(rt: &Arc<RtInner>, agent: &Agent, id: SessionId) -> Session {
     let hooks = rt.hooks.clone().and(agent.hooks.clone());
     let shared = Arc::new(Shared {
         status: Mutex::default(),
+        leaf: Mutex::default(),
         id: id.clone(),
         rt: rt.clone(),
         agent: agent.clone(),
@@ -286,11 +287,18 @@ impl Provider for NoProvider {
 
 /// A snapshot of a session for status lines.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct SessionStatus {
     /// The model in use, after the session's own changes.
     pub model: Option<String>,
     /// The reasoning effort in use, if any is set.
     pub reasoning: Option<Effort>,
+    /// The model the session itself last recorded ([`Session::set_model`]); `None` when it uses
+    /// the agent's or the runtime's.
+    pub session_model: Option<String>,
+    /// The effort the session itself last recorded ([`Session::set_reasoning`]); `None` when it
+    /// uses the agent's.
+    pub session_reasoning: Option<Effort>,
     /// The session's label, if it has one.
     pub label: Option<String>,
     /// Estimated input tokens of the current context.
@@ -301,6 +309,9 @@ pub struct SessionStatus {
 
 pub(crate) struct Shared {
     status: Mutex<SessionStatus>,
+    /// The entry the next message follows, as last published; `None` until the session is first
+    /// projected.
+    leaf: Mutex<Option<Option<String>>>,
     pub(crate) id: SessionId,
     pub(crate) rt: Arc<RtInner>,
     pub(crate) agent: Agent,
@@ -375,11 +386,14 @@ impl Shared {
     }
 
     pub(crate) fn publish_status(&self, live: &Live) {
+        *self.leaf.lock().unwrap() = Some(live.leaf.clone());
         let model = self.model(live);
         let mut s = self.status.lock().unwrap();
         s.context_window = model.as_deref().and_then(|m| self.window(m));
         s.model = model;
         s.reasoning = live.reasoning.or(self.agent.reasoning);
+        s.session_model = live.model.clone();
+        s.session_reasoning = live.reasoning;
         s.label = live.label.clone();
         s.context_tokens = live.estimate(prompt_tokens(&self.agent.instructions, &[]));
     }
@@ -414,6 +428,7 @@ impl Shared {
 struct Snapshot {
     messages: Vec<Message>,
     state: BTreeMap<String, Value>,
+    leaf: Option<String>,
 }
 
 /// Work for the session worker. Everything that touches the context runs here, in order.
@@ -630,9 +645,40 @@ impl Session {
         Ok(self.shared.rt.store.load(&self.shared.id).await?)
     }
 
+    /// The current branch: the tree entries from the first to the one the next message follows,
+    /// without meta records. After [`branch`](Self::branch), the branch it moved to.
+    pub async fn path(&self) -> Result<Vec<Entry>, Error> {
+        let leaf = self.snapshot().await?.leaf;
+        let entries = self.entries().await?;
+        Ok(crate::context::path_to(&entries, leaf.as_deref())
+            .into_iter()
+            .cloned()
+            .collect())
+    }
+
     /// Every event of every turn in this session.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
+    }
+
+    /// The current branch's messages as recorded so far, without waiting for queued work or a
+    /// turn in progress: for showing a session while it runs (its latest message may still be
+    /// streaming, and [`subscribe`](Self::subscribe) follows it from here).
+    pub async fn history_so_far(&self) -> Result<Vec<Message>, Error> {
+        let entries = self.entries().await?;
+        let leaf = self.shared.leaf.lock().unwrap().clone();
+        let live = match leaf {
+            Some(leaf) => Live::project_at(&entries, leaf.as_deref()),
+            None => Live::project(&entries),
+        };
+        // A call still running has no result recorded: the projection's stand-in for one is left out.
+        Ok(live
+            .messages
+            .into_iter()
+            .zip(live.ids)
+            .filter(|(_, id)| !id.is_empty())
+            .map(|(message, _)| message)
+            .collect())
     }
 
     /// The current context, as the model would see it (after any queued work).
@@ -823,6 +869,7 @@ async fn worker(shared: Arc<Shared>, mut rx: mpsc::UnboundedReceiver<Job>) {
                 let _ = done.send(Ok(Snapshot {
                     messages: live.messages.clone(),
                     state: (*live.state).clone(),
+                    leaf: live.leaf.clone(),
                 }));
             }
             Job::Record { record, done } => {

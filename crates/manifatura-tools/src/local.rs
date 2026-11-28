@@ -66,6 +66,34 @@ impl Local {
         self
     }
 
+    /// Where a command runs.
+    fn workdir(&self, spec: &ExecSpec) -> PathBuf {
+        spec.cwd
+            .as_ref()
+            .map(|c| self.resolve(c))
+            .unwrap_or_else(|| self.cwd.clone())
+    }
+
+    /// A command's whole environment: the allowlist, the scratch `TMPDIR`, then what the env
+    /// and the spec set.
+    fn vars(&self, spec: &ExecSpec) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        let mut vars = Vec::new();
+        for k in ALLOWED_VARS
+            .iter()
+            .copied()
+            .chain(self.pass.iter().map(String::as_str))
+        {
+            if let Some(v) = std::env::var_os(k) {
+                vars.push((k.into(), v));
+            }
+        }
+        vars.push(("TMPDIR".into(), self.temp.clone().into()));
+        for (k, v) in self.set.iter().chain(&spec.env) {
+            vars.push((k.into(), v.into()));
+        }
+        vars
+    }
+
     fn command(
         &self,
         program: &std::ffi::OsStr,
@@ -74,26 +102,9 @@ impl Local {
     ) -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(args)
-            .current_dir(
-                spec.cwd
-                    .as_ref()
-                    .map(|c| self.resolve(c))
-                    .unwrap_or_else(|| self.cwd.clone()),
-            )
-            .env_clear();
-        for k in ALLOWED_VARS
-            .iter()
-            .copied()
-            .chain(self.pass.iter().map(String::as_str))
-        {
-            if let Some(v) = std::env::var_os(k) {
-                cmd.env(k, v);
-            }
-        }
-        cmd.env("TMPDIR", &self.temp);
-        for (k, v) in self.set.iter().chain(&spec.env) {
-            cmd.env(k, v);
-        }
+            .current_dir(self.workdir(spec))
+            .env_clear()
+            .envs(self.vars(spec));
         #[cfg(unix)]
         cmd.process_group(0);
         cmd
@@ -104,8 +115,16 @@ impl Local {
         mut cmd: tokio::process::Command,
         spec: ExecSpec,
     ) -> io::Result<Box<dyn Process>> {
-        cmd.stdout(std::fs::File::create(&spec.stdout)?)
-            .stderr(std::fs::File::create(&spec.stderr)?)
+        let stdout = std::fs::File::create(&spec.stdout)?;
+        // The same file for both: one handle, so the streams interleave instead of
+        // overwriting each other.
+        let stderr = if spec.stderr == spec.stdout {
+            stdout.try_clone()?
+        } else {
+            std::fs::File::create(&spec.stderr)?
+        };
+        cmd.stdout(stdout)
+            .stderr(stderr)
             .stdin(if spec.stdin.is_some() {
                 Stdio::piped()
             } else {
@@ -147,14 +166,22 @@ impl Process for LocalProcess {
     }
 
     fn kill(&mut self) {
-        #[cfg(unix)]
-        if let Some(pgid) = self.pgid {
-            // SAFETY: plain syscall; a negative pid addresses the whole process group.
-            unsafe {
-                libc::kill(-(pgid as i32), libc::SIGKILL);
-            }
-        }
+        signal_group(self.pgid, libc::SIGKILL);
         let _ = self.child.start_kill();
+    }
+
+    fn interrupt(&mut self) {
+        signal_group(self.pgid, libc::SIGINT);
+    }
+}
+
+/// Sends `sig` to the process group `pgid` leads.
+pub(crate) fn signal_group(pgid: Option<u32>, sig: libc::c_int) {
+    if let Some(pgid) = pgid {
+        // SAFETY: plain syscall; a negative pid addresses the whole process group.
+        unsafe {
+            libc::kill(-(pgid as i32), sig);
+        }
     }
 }
 
@@ -195,6 +222,18 @@ impl Env for Local {
     }
 
     async fn exec(&self, spec: ExecSpec) -> io::Result<Box<dyn Process>> {
+        if let Some(size) = spec.tty {
+            #[cfg(feature = "pty")]
+            return crate::pty::spawn(&spec, size, self.workdir(&spec), self.vars(&spec));
+            #[cfg(not(feature = "pty"))]
+            {
+                let _ = size;
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "terminals need manifatura-tools' `pty` feature",
+                ));
+            }
+        }
         let (program, args) = split_argv(&spec)?;
         let cmd = self.command(program.as_ref(), &args, &spec);
         self.spawn(cmd, spec).await
@@ -212,6 +251,18 @@ impl Env for Local {
         file.seek(io::SeekFrom::Start(start)).await?;
         let mut bytes = Vec::with_capacity((len - start) as usize);
         file.take(len - start).read_to_end(&mut bytes).await?;
+        Ok((bytes, len))
+    }
+
+    async fn read_range(&self, path: &Path, offset: u64, max: u64) -> io::Result<(Vec<u8>, u64)> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        let mut file = tokio::fs::File::open(self.resolve(path)).await?;
+        let len = file.metadata().await?.len();
+        let start = offset.min(len);
+        file.seek(io::SeekFrom::Start(start)).await?;
+        let n = max.min(len - start);
+        let mut bytes = Vec::with_capacity(n as usize);
+        file.take(n).read_to_end(&mut bytes).await?;
         Ok((bytes, len))
     }
 

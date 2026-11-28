@@ -21,8 +21,40 @@ pub struct ExecSpec {
     pub stdin: Option<Vec<u8>>,
     /// The file standard output goes to.
     pub stdout: PathBuf,
-    /// The file standard error goes to.
+    /// The file standard error goes to. It may be the same file as `stdout`: both streams
+    /// then go to it in the order they are written.
     pub stderr: PathBuf,
+    /// Runs the command in a terminal of this size, for programs that need one (prompts,
+    /// REPLs, full-screen tools). Everything it prints goes to `stdout`, `stderr` is not
+    /// written, and what is typed goes in through [`Process::take_input`]. An env that has no
+    /// terminals refuses the spec.
+    pub tty: Option<TtySize>,
+    /// Runs the command outside the env's sandbox, if it has one. An env with a sandbox does
+    /// this only when it was set up to allow it, and an app should ask the user first; an env
+    /// without one ignores the flag.
+    pub unsandboxed: bool,
+}
+
+/// The size of a terminal, in character cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TtySize {
+    /// Rows.
+    pub rows: u16,
+    /// Columns.
+    pub cols: u16,
+}
+
+impl Default for TtySize {
+    fn default() -> Self {
+        Self { rows: 24, cols: 80 }
+    }
+}
+
+/// Input to a running command: what is typed into its terminal.
+#[async_trait]
+pub trait ProcessInput: Send {
+    /// Writes `bytes` (`\u{3}` is Ctrl-C, `\r` is Enter).
+    async fn write(&mut self, bytes: &[u8]) -> io::Result<()>;
 }
 
 /// A running command.
@@ -34,6 +66,16 @@ pub trait Process: Send {
     async fn wait(&mut self) -> io::Result<i32>;
     /// Kills the command and everything it started.
     fn kill(&mut self);
+    /// Interrupts the command and everything it started, as Ctrl-C would (`SIGINT`). The
+    /// default kills it.
+    fn interrupt(&mut self) {
+        self.kill();
+    }
+    /// The command's input, for a command started in a terminal ([`ExecSpec::tty`]); handed
+    /// out once.
+    fn take_input(&mut self) -> Option<Box<dyn ProcessInput>> {
+        None
+    }
 }
 
 /// What a path is.
@@ -104,6 +146,16 @@ pub trait Env: Send + Sync {
         bytes.drain(..start);
         Ok((bytes, len))
     }
+    /// Up to `max` bytes of a file from byte `offset`, and the file's length: a command's
+    /// output read as it grows. The default reads the whole file; an env that can seek reads
+    /// only the range.
+    async fn read_range(&self, path: &Path, offset: u64, max: u64) -> io::Result<(Vec<u8>, u64)> {
+        let bytes = self.read(path).await?;
+        let len = bytes.len() as u64;
+        let start = offset.min(len) as usize;
+        let end = offset.saturating_add(max).min(len) as usize;
+        Ok((bytes[start..end].to_vec(), len))
+    }
     /// Writes the file, creating parent directories.
     async fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
     /// `None` when the path does not exist.
@@ -145,6 +197,9 @@ impl<E: Env + ?Sized> Env for Arc<E> {
     }
     async fn read_tail(&self, path: &Path, max: u64) -> io::Result<(Vec<u8>, u64)> {
         (**self).read_tail(path, max).await
+    }
+    async fn read_range(&self, path: &Path, offset: u64, max: u64) -> io::Result<(Vec<u8>, u64)> {
+        (**self).read_range(path, offset, max).await
     }
     async fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         (**self).write(path, bytes).await

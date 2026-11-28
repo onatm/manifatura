@@ -70,29 +70,29 @@ fn tools(deferred: &[&Tool]) -> Vec<Tool> {
         .map(|(ns, n)| format!("{ns} ({n} tool{})", if *n == 1 { "" } else { "s" }))
         .collect();
     let search = Tool::from_handler(
-        ToolSpec {
-            name: SEARCH_TOOL.into(),
-            description: format!(
+        ToolSpec::new(
+            SEARCH_TOOL,
+            format!(
                 "Search the catalog of additional tools by keywords. Returns matching tool names, \
                  descriptions and input schemas; run one with {CALL_TOOL}. Catalog: {}.",
                 listing.join(", ")
             ),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "properties": { "query": { "type": "string", "description": "Keywords." } },
                 "required": ["query"]
             }),
-        },
+        ),
         Search {
             index: Index::new(&specs),
             specs,
         },
     );
     let call = Tool::from_handler(
-        ToolSpec {
-            name: CALL_TOOL.into(),
-            description: format!("Run a tool found with {SEARCH_TOOL}."),
-            input_schema: json!({
+        ToolSpec::new(
+            CALL_TOOL,
+            format!("Run a tool found with {SEARCH_TOOL}."),
+            json!({
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "description": "The tool's name." },
@@ -100,7 +100,7 @@ fn tools(deferred: &[&Tool]) -> Vec<Tool> {
                 },
                 "required": ["name", "input"]
             }),
-        },
+        ),
         Unwrapped,
     );
     vec![search, call]
@@ -288,11 +288,11 @@ mod tests {
     use super::*;
 
     fn spec(name: &str, description: &str) -> ToolSpec {
-        ToolSpec {
-            name: name.into(),
-            description: description.into(),
-            input_schema: json!({"type": "object", "properties": {"repo": {"type": "string"}}}),
-        }
+        ToolSpec::new(
+            name,
+            description,
+            json!({"type": "object", "properties": {"repo": {"type": "string"}}}),
+        )
     }
 
     #[test]

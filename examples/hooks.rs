@@ -11,7 +11,7 @@
 
 use std::io::{BufRead, Write};
 
-use manifatura::{Agent, ErrorKind, Event, Hooks, Runtime, SessionId, Tool, hook, models};
+use manifatura::{Agent, ErrorKind, Event, Hooks, Runtime, SessionId, Tool, hook, providers};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hook::Recover::Fail
         });
 
-    let rt = Runtime::builder().provider(models::from_env()?).build();
+    let rt = Runtime::builder().provider(providers::from_env()?).build();
     let session = rt.session(&agent, SessionId::new());
     let prompt = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     let prompt = if prompt.is_empty() {

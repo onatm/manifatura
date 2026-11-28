@@ -1,12 +1,16 @@
 //! Accumulates streamed blocks into the final assistant message.
 
 use manifatura_agent::{
-    Content, ErrorKind, Message, ProviderError, Response, Role, StopReason, Usage,
+    Content, ErrorKind, Message, Phase, ProviderError, Response, Role, StopReason, TEXT_INPUT,
+    Usage,
 };
 use serde_json::Value;
 
 pub(crate) enum Block {
-    Text(String),
+    Text {
+        text: String,
+        phase: Option<Phase>,
+    },
     Thinking {
         text: String,
         signature: Option<String>,
@@ -14,7 +18,10 @@ pub(crate) enum Block {
     Tool {
         id: String,
         name: String,
+        /// JSON arguments, or the raw input of a free-form call.
         args: String,
+        /// A free-form call: `args` is text, which the call carries as `{"input": text}`.
+        text: bool,
     },
 }
 
@@ -29,9 +36,21 @@ impl Acc {
     /// Appends text to the last block if it is text, else starts a text block.
     pub fn text(&mut self, t: &str) {
         match self.blocks.last_mut() {
-            Some(Block::Text(s)) => s.push_str(t),
-            _ => self.blocks.push(Block::Text(t.to_string())),
+            Some(Block::Text { text, .. }) => text.push_str(t),
+            _ => self.blocks.push(Block::Text {
+                text: t.to_string(),
+                phase: None,
+            }),
         }
+    }
+
+    /// Starts a text block for a new message, with its phase, so text after it does not run on
+    /// from an earlier message.
+    pub fn message(&mut self, phase: Option<Phase>) {
+        self.blocks.push(Block::Text {
+            text: String::new(),
+            phase,
+        });
     }
 
     pub fn thinking(&mut self, t: &str) {
@@ -61,14 +80,25 @@ impl Acc {
             .blocks
             .into_iter()
             .filter_map(|b| match b {
-                Block::Text(text) if !text.is_empty() => Some(Content::Text { text }),
-                Block::Text(_) => None,
+                Block::Text { text, phase } if !text.is_empty() => {
+                    Some(Content::Text { text, phase })
+                }
+                Block::Text { .. } => None,
                 Block::Thinking { text, signature } => (!text.is_empty() || signature.is_some())
                     .then_some(Content::Thinking { text, signature }),
-                Block::Tool { id, name, args } => Some(Content::ToolCall {
+                Block::Tool {
                     id,
                     name,
-                    input: parse_args(&args),
+                    args,
+                    text,
+                } => Some(Content::ToolCall {
+                    id,
+                    name,
+                    input: if text {
+                        serde_json::json!({ TEXT_INPUT: args })
+                    } else {
+                        parse_args(&args)
+                    },
                 }),
             })
             .collect();

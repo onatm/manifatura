@@ -76,6 +76,29 @@ When a session is opened, its history is read from the store. Tool calls left wi
 
 Stores implement `Store`: `JsonlStore` writes one file per session, `MemoryStore` keeps them in memory. `rt.store().list()` lists sessions, with the agent named in each and when it last changed.
 
+### Going back
+
+`Session::path` is the current branch, from the first entry to the one the next message follows. To go back to before a message, branch to that message's parent: `session.branch(entry.parent_id.clone())`.
+
+The files can go back too. With the `snapshots` feature (the `manifatura-snapshots` crate), a hook snapshots the working directory as each turn starts, as a git tree in a repository of its own (never the project's `.git`; what `.gitignore` leaves out is left out), and records it in the session:
+
+```rust
+use manifatura::snapshots::{Snapshots, before};
+
+let snapshots = Snapshots::new(data_dir.join("snapshots.git"));
+let agent = Agent::new("…").hooks(snapshots.hooks());
+
+// Later: the files as they were before message `id`, and the conversation too.
+let path = session.path().await?;
+if let Some(tree) = before(&path, &id) {
+    let restored = snapshots.restore(env, &tree).await?; // files changed since written back, new ones removed
+}
+let parent = path.iter().find(|e| e.id == id).and_then(|e| e.parent_id.clone());
+session.branch(parent).await?;
+```
+
+`Snapshots::changes` lists what differs from a snapshot, for a preview. Snapshots run `git` through the env; for a repository in a directory a sandbox keeps commands from writing to, use `Snapshots::unsandboxed(true)` on an env that allows it.
+
 ## Compaction
 
 Nothing compacts by itself. When the context grows too long, a compaction summarises older messages and keeps recent ones:
@@ -90,12 +113,15 @@ println!("{} → {} tokens", report.tokens_before, report.tokens_after);
 
 The cut never separates a tool result from its call, and the previous summary is handed to the next one. The session keeps every message; the summary only changes what the model sees.
 
-Three hooks in `kit::compaction` decide when, if you would rather not:
+Hooks in `kit::compaction` decide when, if you would rather not, or keep the requests small without summarising:
 
 | Hook | What it does |
 | --- | --- |
 | `on_overflow(compactor)` | When the provider reports a context overflow, compacts once and retries the call. |
 | `auto(threshold, compactor)` | Compacts before the next call once the context passes `threshold` of the window (e.g. `0.8`). |
+| `drop_old_results()` | Leaves the results of turns before the previous one out of what is sent, as a one-line stub, without touching the session. Short results, errors and tools that keep their results go whole. A turn past 70% of the window drops its own oldest results down to 50%, in one batch, so the start of each request stays the same and the prompt cache keeps working. `DropResults` sets the turns kept, the size kept and the shares. |
 | `trim_results(keep_recent, max_chars)` | Shortens old, long tool results in what is sent, without touching the session. |
+
+Used together, `drop_old_results` goes first and a summary is the fallback: keep its ceiling under `auto`'s threshold, so results are dropped before a summary is asked for, and `auto` measures the requests as sent, after the drops.
 
 `Summarizer::small()` keeps 6k recent tokens, for small context windows. A `BeforeCompact` hook can change the plan, supply its own summary or cancel.

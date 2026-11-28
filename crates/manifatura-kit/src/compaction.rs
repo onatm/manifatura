@@ -185,6 +185,190 @@ pub fn trim_results(keep_recent: u64, max_chars: usize) -> Hooks {
     })
 }
 
+/// Which tool results [`drop_old_results`] leaves out of what is sent. The session keeps them all.
+///
+/// Results of the current turn and the `keep_turns` before it go whole; older ones become a
+/// one-line stub, so the model knows the call ran and can run it again. A turn starts at each
+/// user message. Short results, errors, and the results of tools that
+/// [keep them](manifatura_agent::ToolBuilder::keep_results) always go whole.
+///
+/// A turn that grows past `ceiling` of the window drops its own oldest results too, down to
+/// `floor`, in one batch: the point it dropped up to is kept in the session state, so later
+/// steps send the same start and the provider's prompt cache keeps working until the next batch.
+#[derive(Clone, Debug)]
+pub struct DropResults {
+    keep_turns: usize,
+    keep_under: usize,
+    ceiling: f32,
+    floor: f32,
+}
+
+impl Default for DropResults {
+    /// The current turn and the one before it; results under 1,000 characters; a batch past 70%
+    /// of the window, down to 50%.
+    fn default() -> Self {
+        Self {
+            keep_turns: 1,
+            keep_under: 1_000,
+            ceiling: 0.7,
+            floor: 0.5,
+        }
+    }
+}
+
+impl DropResults {
+    /// The turns before the current one whose results go whole (default 1).
+    pub fn keep_turns(mut self, n: usize) -> Self {
+        self.keep_turns = n;
+        self
+    }
+
+    /// Results shorter than this many characters always go whole (default 1,000).
+    pub fn keep_under(mut self, chars: usize) -> Self {
+        self.keep_under = chars;
+        self
+    }
+
+    /// The shares of the window at which a turn drops its own results, and down to which
+    /// (default 0.7 and 0.5). Keep `ceiling` under the threshold of [`auto`], so results go
+    /// before a summary is asked for.
+    pub fn window(mut self, ceiling: f32, floor: f32) -> Self {
+        self.ceiling = ceiling;
+        self.floor = floor.min(ceiling);
+        self
+    }
+
+    /// The `Context` hook.
+    pub fn hooks(self) -> Hooks {
+        Hooks::new().on(move |mut e: hook::Context, cx| {
+            let policy = self.clone();
+            async move {
+                let messages = &mut e.messages;
+                let names: HashMap<String, String> = messages
+                    .iter()
+                    .flat_map(|m| &m.content)
+                    .filter_map(|c| match c {
+                        Content::ToolCall { id, name, .. } => Some((id.clone(), name.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                let droppable = |call_id: &str, output: &str, is_error: bool| {
+                    !is_error
+                        && output.len() >= policy.keep_under
+                        && !output.starts_with(DROP_MARK)
+                        && !names
+                            .get(call_id)
+                            .and_then(|name| cx.tool(name))
+                            .is_some_and(|t| t.keeps_results())
+                };
+
+                // Results before the turns kept.
+                let starts: Vec<usize> = (0..messages.len())
+                    .filter(|&i| messages[i].role == Role::User)
+                    .collect();
+                let boundary = starts
+                    .len()
+                    .checked_sub(policy.keep_turns + 1)
+                    .map_or(0, |at| starts[at]);
+                // The results the model has not seen yet are never dropped.
+                let newest = messages
+                    .iter()
+                    .rposition(|m| m.role == Role::Tool)
+                    .filter(|&i| i >= boundary)
+                    .unwrap_or(messages.len());
+                // The point a long turn dropped up to, if it is still in the context.
+                let through: Option<String> = cx.state(DROPPED_THROUGH);
+                let through = through
+                    .and_then(|id| result_index(messages, &id))
+                    .filter(|&i| i >= boundary && i < newest);
+
+                let drop_at = |i: usize, messages: &mut Vec<Message>| -> u64 {
+                    let before = estimate_tokens(&messages[i]);
+                    for c in &mut messages[i].content {
+                        if let Content::ToolResult {
+                            call_id,
+                            output,
+                            is_error,
+                        } = c
+                            && droppable(call_id, output, *is_error)
+                        {
+                            let name = names.get(call_id).map_or("the tool", String::as_str);
+                            *output = dropped(name, output.len());
+                        }
+                    }
+                    before.saturating_sub(estimate_tokens(&messages[i]))
+                };
+                // Everything before `end` is dropped as it was in the last request.
+                let end = through.map_or(boundary, |i| i + 1);
+                for i in 0..end {
+                    if messages[i].role == Role::Tool {
+                        drop_at(i, messages);
+                    }
+                }
+
+                // A long turn: the next batch, oldest first, down to the floor.
+                let window = f64::from(cx.status().context_window.unwrap_or(DEFAULT_WINDOW));
+                let overhead: u64 = cx
+                    .tools()
+                    .iter()
+                    .map(|t| serde_json::to_string(t.spec()).map_or(0, |s| s.len() as u64 / 4))
+                    .sum();
+                let mut tokens = overhead + messages.iter().map(estimate_tokens).sum::<u64>();
+                if tokens as f64 > window * f64::from(policy.ceiling) {
+                    let goal = (window * f64::from(policy.floor)) as u64;
+                    let mut point = None;
+                    for i in end..newest {
+                        if tokens <= goal {
+                            break;
+                        }
+                        if messages[i].role == Role::Tool {
+                            tokens = tokens.saturating_sub(drop_at(i, messages));
+                            point = Some(i);
+                        }
+                    }
+                    if let Some(id) = point.and_then(|i| last_call_id(&messages[i])) {
+                        cx.set_state(DROPPED_THROUGH, id);
+                    }
+                }
+                e
+            }
+        })
+    }
+}
+
+/// The default [`DropResults`]: results of the current turn and the one before go whole.
+pub fn drop_old_results() -> Hooks {
+    DropResults::default().hooks()
+}
+
+/// The session state key [`DropResults`] keeps the call it last dropped a long turn's results
+/// up to under.
+const DROPPED_THROUGH: &str = "compaction.dropped_through";
+const DROP_MARK: &str = "[output of ";
+
+fn dropped(name: &str, chars: usize) -> String {
+    format!(
+        "{DROP_MARK}{name} dropped from the context: {chars} characters; call the tool again if you need it]"
+    )
+}
+
+/// The index of the tool message holding the result of `call_id`.
+fn result_index(messages: &[Message], call_id: &str) -> Option<usize> {
+    messages.iter().position(|m| {
+        m.role == Role::Tool
+            && m.content
+                .iter()
+                .any(|c| matches!(c, Content::ToolResult { call_id: id, .. } if id == call_id))
+    })
+}
+
+fn last_call_id(message: &Message) -> Option<String> {
+    message.content.iter().rev().find_map(|c| match c {
+        Content::ToolResult { call_id, .. } => Some(call_id.clone()),
+        _ => None,
+    })
+}
+
 const TRIM_KEEP_CHARS: usize = 200;
 const TRIM_MARK: &str = "[tool output trimmed";
 
@@ -220,13 +404,13 @@ pub fn transcript(messages: &[Message], max_chars: usize) -> String {
         for m in messages {
             for c in &m.content {
                 match (m.role, c) {
-                    (Role::System, Content::Text { text }) => {
+                    (Role::System, Content::Text { text, .. }) => {
                         out.push_str(&format!("[system note]\n{text}\n\n"))
                     }
-                    (Role::User, Content::Text { text }) => {
+                    (Role::User, Content::Text { text, .. }) => {
                         out.push_str(&format!("[user]\n{text}\n\n"))
                     }
-                    (_, Content::Text { text }) => {
+                    (_, Content::Text { text, .. }) => {
                         out.push_str(&format!("[assistant]\n{text}\n\n"))
                     }
                     (_, Content::ToolCall { id, name, input }) => {
