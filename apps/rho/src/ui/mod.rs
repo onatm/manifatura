@@ -1024,7 +1024,7 @@ impl App {
         match command {
             "/new" => {
                 let session = ready.runtime.session(&ready.agent, SessionId::new());
-                self.view.replay(&[]);
+                self.view.clear();
                 self.view.notice(
                     Level::Info,
                     format!("new session {}", session.id().as_str()),
@@ -1391,6 +1391,8 @@ impl App {
         let session = ready.runtime.session(&ready.agent, id);
         match session.history().await {
             Ok(history) => {
+                self.view.clear();
+                self.view.replay(&history);
                 self.view.notice(
                     Level::Info,
                     format!(
@@ -1399,7 +1401,6 @@ impl App {
                         history.len()
                     ),
                 );
-                self.view.replay(&history);
                 self.switch(session);
             }
             Err(error) => self
