@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
 use super::text::plain;
-use super::view::{clip, copper, dim, user_message_style};
+use super::view::{accent, clip, dim, user_message_style};
 
 /// One choice: its label, a shorter one for narrow terminals, its key and its answer.
 struct Choice {
@@ -190,7 +190,7 @@ impl Ask {
         let first = (self.selected + 1).saturating_sub(choices);
         for (i, choice) in self.choices.iter().enumerate().skip(first).take(choices) {
             let (mark, style) = if i == self.selected {
-                ("›", copper())
+                ("›", accent())
             } else {
                 (" ", Style::new())
             };

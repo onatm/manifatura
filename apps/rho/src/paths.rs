@@ -74,6 +74,14 @@ pub(crate) struct Config {
     /// Take the mouse, so the footer and the task list answer clicks. The terminal's scroll wheel then reaches
     /// rho instead of the scrollback.
     pub(crate) mouse: Option<bool>,
+    /// The colours: `dark`, `light`, `terminal` or one under `[themes]`; without it, dark or light for the
+    /// terminal's background.
+    pub(crate) theme: Option<String>,
+    /// Themes of your own: `base` and colours over it, by name.
+    #[serde(default)]
+    pub(crate) themes: crate::ui::theme::Themes,
+    /// Start with the sidebar open (Ctrl-B toggles it).
+    pub(crate) sidebar: Option<bool>,
     /// Other agents' folders to read too: `claude` reads `.claude/skills` and `~/.claude/skills`.
     #[serde(default)]
     pub(crate) compat: Vec<Compat>,
@@ -170,6 +178,16 @@ pub(crate) fn save_skills(path: &Path, visibility: &BTreeMap<String, Visibility>
     } else {
         doc.insert("skills", Item::Table(table));
     }
+    write(path, &doc.to_string())
+}
+
+/// Sets `theme` in `path`, keeping the rest of the file as it is.
+pub(crate) fn save_theme(path: &Path, theme: &str) -> Result<()> {
+    let mut doc: DocumentMut = read(path)?
+        .unwrap_or_default()
+        .parse()
+        .with_context(|| format!("reading {}", path.display()))?;
+    doc.insert("theme", toml_edit::value(theme));
     write(path, &doc.to_string())
 }
 

@@ -130,6 +130,12 @@ fn chat(cli: Cli, runtime: tokio::runtime::Runtime) -> Result<()> {
     }
     let notices = paths::migrate(&cwd);
     let config = paths::config()?;
+    // The colours come first, so even a problem starting up shows in them.
+    let mut notices = notices;
+    match ui::theme::resolve(config.theme.as_deref(), &config.themes) {
+        Ok((theme, name)) => ui::theme::set(theme, &name),
+        Err(problem) => notices.push(problem),
+    }
     let parse = |e: Option<String>| {
         e.map(|e| agent::parse_effort(&e))
             .transpose()
@@ -144,6 +150,8 @@ fn chat(cli: Cli, runtime: tokio::runtime::Runtime) -> Result<()> {
         default_effort: parse(config.effort)?,
         logs: cli.logs,
         mouse: config.mouse.unwrap_or(false),
+        themes: config.themes,
+        sidebar: config.sidebar.unwrap_or(false),
         context_window: config.context_window,
         rules: config.rules,
         compat: config.compat,

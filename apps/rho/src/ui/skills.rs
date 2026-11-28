@@ -8,10 +8,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use manifatura::skills::{SkillSet, Source, Visibility};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::view::{clip, copper, dim};
+use super::view::{accent, clip, dim};
 
 struct Row {
     name: String,
@@ -139,7 +139,7 @@ impl SkillsPicker {
             format!("filter: {}", self.filter)
         };
         rows.push(Line::from(vec![
-            Span::styled("Skills", copper()),
+            Span::styled("Skills", accent()),
             Span::styled(format!(" · {} · {filter} · {sort}", shown.len()), dim()),
         ]));
         if shown.is_empty() {
@@ -158,14 +158,14 @@ impl SkillsPicker {
         for (at, &i) in shown.iter().enumerate().skip(first).take(count) {
             let row = &self.rows[i];
             let (mark, style) = if at == selected {
-                ("› ", copper())
+                ("› ", accent())
             } else {
                 ("  ", Style::new())
             };
             let state_style = match row.seen {
-                Visibility::On => Style::new().fg(Color::Green),
+                Visibility::On => super::theme::ok(),
                 Visibility::Off => dim(),
-                _ => Style::new().fg(Color::Yellow),
+                _ => super::theme::warn(),
             };
             let head = format!("{:<name_width$} ", clip(&row.name, name_width));
             let state = format!("{:<10}", row.seen.as_str());

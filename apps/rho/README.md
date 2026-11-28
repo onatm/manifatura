@@ -47,7 +47,13 @@ One file, `$XDG_CONFIG_HOME/rho/config.toml` (else `~/.config/rho/config.toml`):
 model = "gpt-6.2-sol"     # new sessions start on it; `rho models` lists the plan's
 effort = "medium"         # and on this effort, when the model has it
 mouse = false             # clicks on the footer and task list; the scroll wheel then goes to rho
+theme = "dark"            # dark, light, terminal or one below; unset: dark or light for the terminal
+sidebar = false           # start with the sidebar open (Ctrl-B toggles it)
 compat = ["claude"]       # also read .claude/skills and ~/.claude/skills
+
+[themes.mine]             # a theme of your own: a base and colours over it
+base = "dark"             # text bright dim accent ok warn error info agent band select added removed rule
+accent = "#7fb4ff"
 
 [rules]                   # "always allow" adds here
 allow = ["exec_command(cargo test)", "mcp__exa__*"]
@@ -77,8 +83,21 @@ The `rules.toml` and `mcp.toml` of earlier versions are moved into it on first s
 | `~/.local/share/rho/snapshots/<directory>.git` | The workspace as each turn found it |
 
 In the chat, `/help` lists the commands: `/model` (the model and its effort), `/tasks` and `/kill` for background commands
-and subagents, `/rules`, `/rewind`, `/resume` and more. Enter while the agent works steers it before its next step; Esc stops
-it.
+and subagents, `/rules`, `/rewind`, `/resume`, `/theme`, `/sidebar` and more. Enter while the agent works steers it before
+its next step; Esc stops it.
+
+The transcript marks each thing in the left column: `›` you, `•` an update while rho works (dim), `◇` reads and searches
+(grouped while they run back to back), `✎` an edit with its first changed lines, `$` a command, `↳` a subagent, `☰` the
+plan, `◆` a skill, `⌁` another tool. The answer is unmarked and brightest. Ctrl-O (or `/tools`) prints this turn's tool
+output in full. The footer shows the model, effort and a context meter that turns yellow at 80% and red at 95%.
+
+`/model` is a grid of the plan's models and their efforts, with each model's default `◎` and the session's choice `●`: ↑↓
+move to a model at its default, ←→ change the effort, Enter uses them here and for new sessions.
+
+Ctrl-B (or `/sidebar`) opens a sidebar beside the composer on terminals 100 columns or wider: the session's model, effort
+and context, the plan, the files changed, the background commands and subagents, the MCP servers and the skills. It is off
+unless `sidebar = true`. `/theme <name>` switches the colours and saves the choice; lines already in the scrollback keep
+theirs.
 
 The background tasks are the commands left running and the subagents started. ↓ on an empty composer (or `/tasks`, or a click on
 "N in background" with `mouse = true`) lists them: Enter on a command shows its output as it runs, `k` stops it, and Enter on a subagent

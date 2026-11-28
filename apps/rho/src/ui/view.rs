@@ -1,17 +1,24 @@
 //! What the screen shows of a session: finished items, written once into the terminal's scrollback, and the
 //! live part (the reply as it streams, the tools running) redrawn below them. It is fed manifatura's session
 //! events only.
+//!
+//! Each item is marked in the left column by what it is: `›` you, `•` an update while rho works, `◇` reads and
+//! searches (grouped while they run back to back), `✎` an edit, `$` a command, `↳` a subagent, `☰` the plan, `◆` a
+//! skill, `⌁` any other tool. The answer is unmarked and brightest.
 
-use std::sync::{Arc, LazyLock};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Instant;
 
-use manifatura::{Content, Event, Message, Outcome, Role};
-use ratatui::style::{Color, Modifier, Style};
+use manifatura::{Content, Event, Message, Outcome, Phase, Role};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::text::{markdown, plain, wrap};
+pub(crate) use super::theme::{accent, dim};
+use super::theme::{agent, bright, error, info, ok, theme, warn};
 
 /// A finished piece of the transcript.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,15 +28,34 @@ pub(crate) enum Item {
         model: String,
     },
     User(String),
-    Assistant(String),
+    /// A paragraph of a reply: an update while rho works, or its answer. `opens` marks a message's first.
+    Assistant {
+        text: String,
+        update: bool,
+        opens: bool,
+    },
     /// Reasoning, whole, with how long it went on when that is known.
     Reasoning {
         text: String,
         seconds: Option<u64>,
     },
     Tool(Arc<ToolOutput>),
+    /// Reads and searches made back to back.
+    Explored(Vec<Arc<ToolOutput>>),
     ToolDetails(Arc<ToolOutput>),
     Notice(Level, String),
+}
+
+impl Item {
+    /// The answer, or a paragraph of it.
+    #[cfg(test)]
+    pub(crate) fn answer(text: &str) -> Self {
+        Item::Assistant {
+            text: text.into(),
+            update: false,
+            opens: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,31 +65,9 @@ pub(crate) enum Level {
     Error,
 }
 
-pub(crate) fn dim() -> Style {
-    Style::new().add_modifier(Modifier::DIM)
-}
-
-// Many terminals advertise their ANSI background in COLORFGBG. Give the highlighted
-// prompt its own readable foreground as well, including when the background is unknown.
-static LIGHT: LazyLock<bool> = LazyLock::new(|| {
-    let background = std::env::var("COLORFGBG").unwrap_or_default();
-    matches!(background.rsplit(';').next(), Some("7" | "15"))
-});
-
-pub(crate) fn copper() -> Style {
-    let color = if *LIGHT {
-        Color::Rgb(156, 65, 36)
-    } else {
-        Color::Rgb(207, 127, 83)
-    };
-    Style::new().fg(color).add_modifier(Modifier::BOLD)
-}
-
 pub(super) fn user_message_style() -> Style {
-    let (ink, paper) = if *LIGHT { (38, 239) } else { (235, 38) };
-    Style::new()
-        .fg(Color::Rgb(ink, ink, ink))
-        .bg(Color::Rgb(paper, paper, paper))
+    let theme = theme();
+    Style::new().fg(theme.bright).bg(theme.band)
 }
 
 /// Leave two cells for the chevron and one at the right edge.
@@ -86,29 +90,154 @@ pub(crate) struct ToolOutput {
     details: Vec<(String, Style)>,
 }
 
+/// Whether a call only looks: reads and searches, which the transcript groups.
+fn looks(name: &str) -> bool {
+    matches!(name, "read" | "grep" | "glob")
+}
+
+/// How many of a subagent's calls show under it.
+const CHILD_LINES: usize = 4;
+
+/// How many changed lines of a patch show under it.
+const PATCH_LINES: usize = 12;
+
 impl ToolOutput {
     fn heading(&self) -> String {
         let mark = if self.is_error { "✗" } else { "✓" };
         format!("{mark} {} {}", title(&self.name), self.summary)
     }
 
-    /// A finished call as a tree: `● Search fn main`, then under a `⎿` a subagent's calls, all of them, and what
-    /// came of it.
+    /// The mark a call shows in the left column, coloured by what it is, or red when it failed.
+    fn mark(&self) -> Span<'static> {
+        let (glyph, style) = glyph(&self.name, self.subagent);
+        Span::styled(
+            format!("{glyph} "),
+            if self.is_error { error() } else { style },
+        )
+    }
+
+    /// A finished call: its mark and what it did, then what came of it.
     fn tree(&self, width: usize) -> Vec<Line<'static>> {
-        let mark = Style::new().fg(if self.is_error {
-            Color::Red
-        } else {
-            Color::Green
-        });
-        let mut out = call_lines(Span::styled("● ", mark), &self.name, &self.summary, width);
-        let mut branch = self
-            .children
+        match self.name.as_str() {
+            "apply_patch" => self.patch(width),
+            "update_plan" => {
+                let done = self
+                    .details
+                    .iter()
+                    .filter(|(step, _)| step.starts_with('✓'))
+                    .count();
+                let mut out = head(
+                    self.mark(),
+                    vec![
+                        Span::raw("Plan "),
+                        Span::styled(format!("{done}/{}", self.details.len()), dim()),
+                    ],
+                    width,
+                );
+                for (step, style) in &self.details {
+                    out.extend(wrap(
+                        vec![Span::raw("  "), Span::styled(step.clone(), *style)],
+                        width,
+                        "    ",
+                    ));
+                }
+                if self.is_error {
+                    out.extend(branches(&[self.result()], width));
+                }
+                out
+            }
+            _ => {
+                let mut out = head(self.mark(), self.label(), width);
+                let mut under: Vec<(String, Style)> = Vec::new();
+                if self.children.len() > CHILD_LINES {
+                    under.push((
+                        format!("⋯ {} earlier", self.children.len() - CHILD_LINES),
+                        dim(),
+                    ));
+                }
+                let shown = self.children.len().saturating_sub(CHILD_LINES);
+                under.extend(self.children[shown..].iter().map(|c| (c.clone(), dim())));
+                under.extend(self.details.iter().cloned());
+                under.push(self.result());
+                out.extend(branches(&under, width));
+                out
+            }
+        }
+    }
+
+    /// What the call's line says after the mark: a command as it ran, otherwise the tool and what it worked on.
+    fn label(&self) -> Vec<Span<'static>> {
+        match (self.name.as_str(), self.subagent) {
+            ("exec_command" | "bash", false) => vec![Span::raw(self.summary.clone())],
+            (_, true) => vec![
+                Span::styled(self.name.clone(), Style::new().add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" {}", self.summary), dim()),
+            ],
+            (name, false) => vec![
+                Span::styled(
+                    title(name).to_owned(),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!(" {}", self.summary)),
+            ],
+        }
+    }
+
+    /// An edit: the files with the lines added and removed, then the changes, the first of them.
+    fn patch(&self, width: usize) -> Vec<Line<'static>> {
+        let (added, removed) = self
+            .details
             .iter()
-            .map(|child| (child.clone(), dim()))
-            .collect::<Vec<_>>();
-        branch.extend(self.details.iter().cloned());
-        branch.push(self.result());
-        out.extend(branches(&branch, width));
+            .filter(|(_, style)| !style.add_modifier.contains(Modifier::BOLD))
+            .fold((0, 0), |(a, r), (line, _)| match line.chars().next() {
+                Some('+') => (a + 1, r),
+                Some('-') => (a, r + 1),
+                _ => (a, r),
+            });
+        let mut label = vec![Span::raw(format!("Edited {}", self.summary))];
+        if added > 0 {
+            label.push(Span::styled(format!(" +{added}"), ok()));
+        }
+        if removed > 0 {
+            label.push(Span::styled(format!(" −{removed}"), error()));
+        }
+        let mut out = head(self.mark(), label, width);
+        let theme = theme();
+        let mut changed = 0;
+        let mut hidden = 0;
+        for (line, style) in &self.details {
+            let file = style.add_modifier.contains(Modifier::BOLD);
+            if !file {
+                changed += 1;
+                if changed > PATCH_LINES {
+                    hidden += 1;
+                    continue;
+                }
+            }
+            let background = match line.chars().next() {
+                _ if file => None,
+                Some('+') => Some(theme.added),
+                Some('-') => Some(theme.removed),
+                _ => None,
+            };
+            let mut row = Line::from(vec![
+                Span::raw("    "),
+                Span::styled(clip(line, width.saturating_sub(4)), *style),
+            ]);
+            if let Some(background) = background {
+                row = row.style(Style::new().bg(background));
+            }
+            out.push(row);
+        }
+        if hidden > 0 {
+            out.push(Line::styled(
+                format!("    ⋯ {hidden} more changed lines · ctrl-o shows them"),
+                dim(),
+            ));
+        }
+        if self.is_error {
+            out.extend(branches(&[self.result()], width));
+        }
         out
     }
 
@@ -123,7 +252,7 @@ impl ToolOutput {
         if self.is_error {
             return (
                 lines.first().copied().unwrap_or("failed").to_owned(),
-                Style::new().fg(Color::Red),
+                error(),
             );
         }
         if self.subagent {
@@ -134,7 +263,7 @@ impl ToolOutput {
             let time = self
                 .seconds
                 .map_or_else(String::new, |s| format!(" · {}", duration(s)));
-            return (format!("Done · {calls}{time}"), dim());
+            return (format!("Reported · {calls}{time}"), dim());
         }
         match self.name.as_str() {
             "exec_command" | "write_stdin" => return exec_result(&self.output),
@@ -156,13 +285,67 @@ impl ToolOutput {
         let text = match (lines.len(), self.name.as_str()) {
             (0, _) => "No output".to_owned(),
             (1, _) => lines[0].trim().to_owned(),
-            (n, "read") => format!("Read {n} lines"),
+            (n, "read") => format!("{n} lines"),
             (n, "grep") => format!("{n} matching lines"),
             (n, "glob") => format!("{n} paths"),
             (n, _) => format!("{n} lines of output"),
         };
         (text, dim())
     }
+}
+
+/// The mark of a call by what it is.
+fn glyph(name: &str, subagent: bool) -> (&'static str, Style) {
+    if subagent {
+        return ("↳", agent());
+    }
+    match name {
+        "read" | "grep" | "glob" => ("◇", info()),
+        "exec_command" | "bash" | "write_stdin" => ("$", ok()),
+        "apply_patch" => ("✎", accent()),
+        "update_plan" => ("☰", agent()),
+        "skill" => ("◆", info()),
+        _ => ("⌁", info()),
+    }
+}
+
+/// Reads and searches as one item: how many of each, then each on a line with what it found.
+fn explored(calls: &[Arc<ToolOutput>], width: usize, live: bool) -> Vec<Line<'static>> {
+    let count =
+        |name: &str, one: &str, many: &str| match calls.iter().filter(|c| c.name == name).count() {
+            0 => None,
+            1 => Some(format!("1 {one}")),
+            n => Some(format!("{n} {many}")),
+        };
+    let counts: Vec<String> = [
+        count("grep", "search", "searches"),
+        count("glob", "find", "finds"),
+        count("read", "read", "reads"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut out = head(
+        Span::styled("◇ ", info()),
+        vec![
+            Span::raw(if live { "Exploring" } else { "Explored" }),
+            Span::styled(format!(" · {}", counts.join(", ")), dim()),
+        ],
+        width,
+    );
+    let rows: Vec<(String, Style)> = calls
+        .iter()
+        .map(|call| {
+            let (result, style) = call.result();
+            let verb = title(&call.name).to_lowercase();
+            (
+                format!("{verb} {} · {result}", call.summary),
+                style.patch(dim()),
+            )
+        })
+        .collect();
+    out.extend(branches(&rows, width));
+    out
 }
 
 /// What a command's report (`exec_command`, `write_stdin`) says: its exit code and output size, or
@@ -182,17 +365,10 @@ fn exec_result(report: &str) -> (String, Style) {
     };
     for line in report.lines() {
         if let Some(code) = line.strip_prefix("Process exited with code ") {
-            let style = if code.trim() == "0" {
-                dim()
-            } else {
-                Style::new().fg(Color::Red)
-            };
-            let text = if code.trim() == "0" {
-                size
-            } else {
-                format!("Exit {} · {size}", code.trim())
-            };
-            return (text, style);
+            if code.trim() == "0" {
+                return (format!("✓ {size}"), dim());
+            }
+            return (format!("Exit {} · {size}", code.trim()), error());
         }
         if let Some(id) = line.strip_prefix("Process running with session ID ") {
             return (
@@ -208,98 +384,94 @@ fn exec_result(report: &str) -> (String, Style) {
 pub(crate) fn tool_details(name: &str, input: &Value) -> Vec<(String, Style)> {
     match name {
         "apply_patch" => patch_lines(input["input"].as_str().unwrap_or_default()),
-        "update_plan" => input["plan"]
-            .as_array()
-            .map(|steps| {
-                steps
-                    .iter()
-                    .map(|s| {
-                        let step = s["step"].as_str().unwrap_or_default();
-                        match s["status"].as_str() {
-                            Some("completed") => (
-                                format!("☑ {step}"),
-                                dim().add_modifier(Modifier::CROSSED_OUT),
-                            ),
-                            Some("in_progress") => (format!("◐ {step}"), copper()),
-                            _ => (format!("☐ {step}"), Style::new()),
-                        }
-                    })
-                    .collect()
+        "update_plan" => plan_steps(input)
+            .into_iter()
+            .map(|(step, status)| match status.as_str() {
+                "completed" => (format!("✓ {step}"), dim()),
+                "in_progress" => (format!("● {step}"), accent()),
+                _ => (format!("○ {step}"), Style::new()),
             })
-            .unwrap_or_default(),
+            .collect(),
         _ => Vec::new(),
     }
 }
 
-/// How many changed lines of a patch the transcript shows.
-const PATCH_LINES: usize = 40;
+/// A plan's steps and their status (`pending`, `in_progress`, `completed`).
+fn plan_steps(input: &Value) -> Vec<(String, String)> {
+    input["plan"]
+        .as_array()
+        .map(|steps| {
+            steps
+                .iter()
+                .map(|s| {
+                    (
+                        s["step"].as_str().unwrap_or_default().to_owned(),
+                        s["status"].as_str().unwrap_or("pending").to_owned(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
-/// A patch as the transcript shows it: each file, then its added and removed lines, coloured.
-fn patch_lines(patch: &str) -> Vec<(String, Style)> {
-    let mut out = Vec::new();
-    let mut hidden = 0;
+/// The files a patch changes, each with the lines it adds and removes.
+fn patch_counts(patch: &str) -> Vec<(String, usize, usize)> {
+    let mut out: Vec<(String, usize, usize)> = Vec::new();
     for line in patch.lines() {
-        let shown = if let Some(path) = line.strip_prefix("*** Add File: ") {
-            Some((
-                format!("+ {path}"),
-                Style::new().add_modifier(Modifier::BOLD),
-            ))
-        } else if let Some(path) = line.strip_prefix("*** Update File: ") {
-            Some((
-                format!("~ {path}"),
-                Style::new().add_modifier(Modifier::BOLD),
-            ))
-        } else if let Some(path) = line.strip_prefix("*** Delete File: ") {
-            Some((
-                format!("- {path}"),
-                Style::new().add_modifier(Modifier::BOLD),
-            ))
-        } else if let Some(path) = line.strip_prefix("*** Move to: ") {
-            Some((
-                format!("→ {path}"),
-                Style::new().add_modifier(Modifier::BOLD),
-            ))
-        } else if line.starts_with('+') {
-            Some((line.to_owned(), Style::new().fg(Color::Green)))
-        } else if line.starts_with('-') {
-            Some((line.to_owned(), Style::new().fg(Color::Red)))
-        } else {
-            None
-        };
-        if let Some(row) = shown {
-            if out.len() < PATCH_LINES || row.1.add_modifier.contains(Modifier::BOLD) {
-                out.push(row);
-            } else {
-                hidden += 1;
+        let file = ["*** Add File: ", "*** Update File: ", "*** Delete File: "]
+            .iter()
+            .find_map(|p| line.strip_prefix(p));
+        if let Some(path) = file {
+            out.push((path.to_owned(), 0, 0));
+        } else if line.starts_with("***") {
+            continue;
+        } else if let Some(last) = out.last_mut() {
+            if line.starts_with('+') {
+                last.1 += 1;
+            } else if line.starts_with('-') {
+                last.2 += 1;
             }
         }
-    }
-    if hidden > 0 {
-        out.push((format!("… {hidden} more changed lines"), dim()));
     }
     out
 }
 
-/// A call's header: its mark, its name in bold and its summary, wrapped under itself.
-fn call_lines(mark: Span<'static>, name: &str, summary: &str, width: usize) -> Vec<Line<'static>> {
-    let mut spans = vec![
-        mark,
-        Span::styled(
-            title(name).to_owned(),
-            Style::new().add_modifier(Modifier::BOLD),
-        ),
-    ];
-    if !summary.is_empty() {
-        spans.push(Span::raw(format!(" {summary}")));
+/// A patch as the transcript shows it: each file, then its added and removed lines, coloured.
+fn patch_lines(patch: &str) -> Vec<(String, Style)> {
+    let mut out = Vec::new();
+    for line in patch.lines() {
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        let shown = if let Some(path) = line.strip_prefix("*** Add File: ") {
+            Some((format!("new {path}"), bold))
+        } else if let Some(path) = line.strip_prefix("*** Update File: ") {
+            Some((path.to_owned(), bold))
+        } else if let Some(path) = line.strip_prefix("*** Delete File: ") {
+            Some((format!("deleted {path}"), bold))
+        } else if let Some(path) = line.strip_prefix("*** Move to: ") {
+            Some((format!("→ {path}"), bold))
+        } else if line.starts_with('+') {
+            Some((line.to_owned(), ok()))
+        } else if line.starts_with('-') {
+            Some((line.to_owned(), error()))
+        } else {
+            None
+        };
+        out.extend(shown);
     }
+    out
+}
+
+/// A line led by a mark, wrapped under itself.
+fn head(mark: Span<'static>, mut spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
+    spans.insert(0, mark);
     wrap(spans, width, "  ")
 }
 
-/// Lines under a call: the first after `⎿`, the rest lined up with it, each wrapped rather than cut.
+/// Lines under a call: the first after `└`, the rest lined up with it, each wrapped rather than cut.
 fn branches(lines: &[(String, Style)], width: usize) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for (i, (text, style)) in lines.iter().enumerate() {
-        let lead = if i == 0 { "  ⎿ " } else { "    " };
+        let lead = if i == 0 { "  └ " } else { "    " };
         out.extend(wrap(
             vec![
                 Span::styled(lead, dim()),
@@ -320,6 +492,34 @@ fn duration(seconds: u64) -> String {
     }
 }
 
+/// A reply's paragraph: an update dim, after a `•` when it opens its message; the answer bright.
+fn reply(text: &str, update: bool, opens: bool, width: usize) -> Vec<Line<'static>> {
+    if !update {
+        return markdown(text, width)
+            .into_iter()
+            .map(|line| {
+                let style = bright().patch(line.style);
+                line.style(style)
+            })
+            .collect();
+    }
+    markdown(text, width.saturating_sub(2).max(8))
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut line)| {
+            if line.width() == 0 {
+                return line;
+            }
+            for span in &mut line.spans {
+                span.style = span.style.patch(dim());
+            }
+            let lead = if i == 0 && opens { "• " } else { "  " };
+            line.spans.insert(0, Span::styled(lead, dim()));
+            line
+        })
+        .collect()
+}
+
 impl Item {
     /// The item as wrapped lines, after a blank line that separates it from the one before.
     pub(crate) fn lines(&self, width: usize) -> Vec<Line<'static>> {
@@ -327,7 +527,7 @@ impl Item {
         match self {
             Item::Header { directory, model } => {
                 let mut header = Line::from(vec![
-                    Span::styled("rho  ", copper()),
+                    Span::styled("rho  ", accent()),
                     Span::styled(directory.clone(), dim()),
                 ]);
                 if header.width() + model.width() + 2 <= width {
@@ -346,7 +546,7 @@ impl Item {
                     .enumerate()
                 {
                     let prefix = if i == 0 {
-                        Span::styled("› ", dim().add_modifier(Modifier::BOLD))
+                        Span::styled("› ", accent())
                     } else {
                         Span::raw("  ")
                     };
@@ -356,7 +556,11 @@ impl Item {
                 }
                 out.push(padding);
             }
-            Item::Assistant(text) => out.extend(markdown(text, width)),
+            Item::Assistant {
+                text,
+                update,
+                opens,
+            } => out.extend(reply(text, *update, *opens, width)),
             Item::Reasoning { text, seconds } => {
                 let style = dim().add_modifier(Modifier::ITALIC);
                 let heading = match seconds {
@@ -370,6 +574,7 @@ impl Item {
                 }
             }
             Item::Tool(tool) => out.extend(tool.tree(width)),
+            Item::Explored(calls) => out.extend(explored(calls, width, false)),
             Item::ToolDetails(tool) => {
                 out.extend(plain(&tool.heading(), width, dim()));
                 out.extend(plain(&tool.output.replace('\t', "  "), width, Style::new()));
@@ -377,8 +582,8 @@ impl Item {
             Item::Notice(level, text) => {
                 let style = match level {
                     Level::Info => dim(),
-                    Level::Warn => Style::new().fg(Color::Yellow),
-                    Level::Error => Style::new().fg(Color::Red),
+                    Level::Warn => warn(),
+                    Level::Error => error(),
                 };
                 out.extend(plain(text, width, style));
             }
@@ -419,6 +624,9 @@ fn title(name: &str) -> &str {
         "apply_patch" => "Patch",
         "update_plan" => "Plan",
         "explore" => "Explore",
+        "skill" => "Skill",
+        "find_tools" => "Find tools",
+        "run_tool" => "Tool",
         other => other,
     }
 }
@@ -515,6 +723,8 @@ struct Running {
     subagent: bool,
     children: Vec<String>,
     details: Vec<(String, Style)>,
+    /// For a patch: the files it changes, with lines added and removed.
+    changes: Vec<(String, usize, usize)>,
     started: Instant,
 }
 
@@ -534,6 +744,17 @@ pub(crate) struct View {
     thinking_since: Option<Instant>,
     running: Vec<Running>,
     tools: Vec<Arc<ToolOutput>>,
+    /// Reads and searches finished back to back, shown live until something else comes.
+    exploring: Vec<Arc<ToolOutput>>,
+    /// Whether the message streaming now is an update rather than the answer, whether its first paragraph is
+    /// in the scrollback, and whether this model call streamed any text.
+    update: bool,
+    opened: bool,
+    streamed_text: bool,
+    /// The latest plan's steps and their status, and the files changed in the session, with lines added and
+    /// removed.
+    plan: Vec<(String, String)>,
+    changes: BTreeMap<String, (usize, usize)>,
     /// Set when the scrollback is to be wiped before the next items are written.
     cleared: bool,
     pub(crate) activity: Activity,
@@ -551,6 +772,12 @@ impl View {
             thinking_since: None,
             running: Vec::new(),
             tools: Vec::new(),
+            exploring: Vec::new(),
+            update: false,
+            opened: false,
+            streamed_text: false,
+            plan: Vec::new(),
+            changes: BTreeMap::new(),
             cleared: false,
             activity: Activity::Idle,
             since: None,
@@ -561,8 +788,47 @@ impl View {
         self.activity != Activity::Idle
     }
 
+    /// Adds a finished item, after the reads and searches before it.
     pub(crate) fn push(&mut self, item: Item) {
+        self.flush_explored();
         self.committed.push(item);
+    }
+
+    /// The reads and searches made back to back go to the scrollback as one item.
+    fn flush_explored(&mut self) {
+        if !self.exploring.is_empty() {
+            let calls = std::mem::take(&mut self.exploring);
+            self.committed.push(Item::Explored(calls));
+        }
+    }
+
+    /// The latest plan's steps and their status.
+    pub(crate) fn plan(&self) -> &[(String, String)] {
+        &self.plan
+    }
+
+    /// The files changed in the session, with lines added and removed.
+    pub(crate) fn changes(&self) -> &BTreeMap<String, (usize, usize)> {
+        &self.changes
+    }
+
+    /// Takes what a call did into the plan and the changed files.
+    fn track(&mut self, name: &str, input: &Value) {
+        match name {
+            "update_plan" => self.plan = plan_steps(input),
+            "apply_patch" => {
+                self.count_changes(patch_counts(input["input"].as_str().unwrap_or_default()))
+            }
+            _ => {}
+        }
+    }
+
+    fn count_changes(&mut self, changes: Vec<(String, usize, usize)>) {
+        for (file, added, removed) in changes {
+            let entry = self.changes.entry(file).or_default();
+            entry.0 += added;
+            entry.1 += removed;
+        }
     }
 
     pub(crate) fn notice(&mut self, level: Level, text: impl Into<String>) {
@@ -573,6 +839,9 @@ impl View {
     pub(crate) fn clear(&mut self) {
         self.committed.clear();
         self.tools.clear();
+        self.exploring.clear();
+        self.plan.clear();
+        self.changes.clear();
         self.cleared = true;
     }
 
@@ -599,6 +868,7 @@ impl View {
                     subagent,
                     children: Vec::new(),
                     details: tool_details(name, input),
+                    changes: Vec::new(),
                     started: Instant::now(),
                 });
             }
@@ -622,9 +892,14 @@ impl View {
     }
 
     fn finish_tool(&mut self, tool: ToolOutput) {
+        let looked = looks(&tool.name) && !tool.is_error && !tool.subagent;
         let tool = Arc::new(tool);
         self.tools.push(tool.clone());
-        self.push(Item::Tool(tool));
+        if looked {
+            self.exploring.push(tool);
+        } else {
+            self.push(Item::Tool(tool));
+        }
     }
 
     pub(crate) fn show_tools(&mut self) {
@@ -663,18 +938,30 @@ impl View {
     /// The calls running now, as trees: a subagent with every call it has made so far.
     pub(crate) fn running_lines(&self, width: usize) -> Vec<Line<'static>> {
         let mut out = Vec::new();
+        if !self.exploring.is_empty() {
+            out.extend(explored(&self.exploring, width, true));
+        }
         for call in &self.running {
-            out.extend(call_lines(
-                Span::styled("○ ", dim()),
-                &call.name,
-                &call.summary,
+            let (glyph, _) = glyph(&call.name, call.subagent);
+            let label = match (call.name.as_str(), call.subagent) {
+                ("exec_command" | "bash", false) => call.summary.clone(),
+                _ => format!("{} {}", title(&call.name), call.summary),
+            };
+            out.extend(head(
+                Span::styled(format!("{glyph} "), dim()),
+                vec![Span::styled(label, dim())],
                 width,
             ));
-            let children: Vec<(String, Style)> = call
-                .children
-                .iter()
-                .map(|child| (child.clone(), dim()))
-                .collect();
+            let shown = call.children.len().saturating_sub(CHILD_LINES);
+            let mut children: Vec<(String, Style)> = Vec::new();
+            if shown > 0 {
+                children.push((format!("⋯ {shown} earlier"), dim()));
+            }
+            children.extend(
+                call.children[shown..]
+                    .iter()
+                    .map(|child| (child.clone(), dim())),
+            );
             out.extend(branches(&children, width));
         }
         out
@@ -708,7 +995,13 @@ impl View {
         let text = rest[..end].trim_end();
         if !text.trim().is_empty() {
             // Paragraphs keep the blank line between them, as the whole reply rendered would have.
-            self.push(Item::Assistant(text.to_owned()));
+            let opens = !self.opened;
+            self.opened = true;
+            self.push(Item::Assistant {
+                text: text.to_owned(),
+                update: self.update,
+                opens,
+            });
         }
         self.streamed += end;
     }
@@ -719,12 +1012,15 @@ impl View {
         self.commit_text(true);
         self.streaming.clear();
         self.streamed = 0;
+        self.opened = false;
     }
 
     /// A stored conversation as items, when a session is resumed.
     pub(crate) fn replay(&mut self, messages: &[Message]) {
         self.tools.clear();
+        self.exploring.clear();
         let mut calls = std::collections::HashMap::new();
+        let mut calls_input = std::collections::HashMap::new();
         for message in messages {
             if message.role == Role::User {
                 self.tools.clear();
@@ -740,10 +1036,18 @@ impl View {
                             seconds: None,
                         })
                     }
-                    (Role::Assistant, Content::Text { text, .. }) if !text.trim().is_empty() => {
-                        self.push(Item::Assistant(text.clone()))
+                    (Role::Assistant, Content::Text { text, phase }) if !text.trim().is_empty() => {
+                        self.push(Item::Assistant {
+                            text: text.clone(),
+                            update: *phase == Some(Phase::Commentary),
+                            opens: true,
+                        })
                     }
                     (Role::Assistant, Content::ToolCall { id, name, input }) => {
+                        if !looks(name) {
+                            // A call that failed changed nothing; one in an old session is taken as done.
+                            calls_input.insert(id.clone(), (name.clone(), input.clone()));
+                        }
                         calls.insert(
                             id.clone(),
                             (
@@ -761,6 +1065,9 @@ impl View {
                             is_error,
                         },
                     ) => {
+                        if !*is_error && let Some((name, input)) = calls_input.remove(call_id) {
+                            self.track(&name, &input);
+                        }
                         let ((name, subagent), summary, details) = calls
                             .remove(call_id)
                             .unwrap_or_else(|| (("tool".into(), false), String::new(), Vec::new()));
@@ -780,6 +1087,7 @@ impl View {
                 }
             }
         }
+        self.flush_explored();
     }
 
     pub(crate) fn apply(&mut self, event: &Event) {
@@ -789,7 +1097,16 @@ impl View {
                 self.since = Some(Instant::now());
                 self.tools.clear();
             }
-            Event::StepStarted { .. } => self.activity = Activity::Thinking,
+            Event::StepStarted { .. } => {
+                self.activity = Activity::Thinking;
+                self.streamed_text = false;
+                self.update = false;
+            }
+            Event::MessageStarted { phase, .. } => {
+                // The message before it ends here; this one is an update or the answer.
+                self.finish_reply();
+                self.update = *phase == Some(Phase::Commentary);
+            }
             Event::ReasoningDelta { text, .. } => {
                 self.thinking_since.get_or_insert_with(Instant::now);
                 self.reasoning.push_str(text);
@@ -798,13 +1115,14 @@ impl View {
             Event::TextDelta { text, .. } => {
                 // The reasoning is over once the answer starts.
                 self.collapse_reasoning();
+                self.streamed_text = true;
                 self.streaming.push_str(text);
                 self.commit_text(false);
                 self.activity = Activity::Generating;
             }
             Event::MessageAppended { message, .. } if message.role == Role::Assistant => {
                 // A reply that did not stream (none do here, but a provider may) is shown whole.
-                if self.streaming.is_empty() {
+                if !self.streamed_text {
                     self.streaming = message.text();
                 }
                 self.finish_reply();
@@ -817,6 +1135,13 @@ impl View {
             } => {
                 let summary = tool_summary(name, input);
                 let details = tool_details(name, input);
+                let changes = match name.as_str() {
+                    "apply_patch" => patch_counts(input["input"].as_str().unwrap_or_default()),
+                    _ => Vec::new(),
+                };
+                if name == "update_plan" {
+                    self.plan = plan_steps(input);
+                }
                 let (name, subagent) = shown_name(name, input);
                 let started = Instant::now();
                 self.running.push(Running {
@@ -826,6 +1151,7 @@ impl View {
                     subagent,
                     children: Vec::new(),
                     details,
+                    changes,
                     started,
                 });
                 self.activity = Activity::Running;
@@ -858,6 +1184,9 @@ impl View {
                         .then(|| running.started.elapsed().as_secs());
                     tool.children = running.children;
                     tool.details = running.details;
+                    if !*is_error {
+                        self.count_changes(running.changes);
+                    }
                 }
                 self.finish_tool(tool);
                 self.activity = match self.running.is_empty() {
@@ -882,6 +1211,7 @@ impl View {
             Event::TurnCompleted { outcome, error, .. } => {
                 // What an interrupted reply got to stays on the screen.
                 self.finish_reply();
+                self.flush_explored();
                 self.running.clear();
                 self.activity = Activity::Idle;
                 self.since = None;
@@ -922,7 +1252,7 @@ impl View {
         }
         let text = &self.streaming[self.streamed..];
         if !text.trim().is_empty() {
-            out.extend(markdown(text, width));
+            out.extend(reply(text, self.update, !self.opened, width));
         }
         if out.len() > max {
             out.drain(..out.len() - max);
@@ -1095,13 +1425,13 @@ mod tests {
         assert_eq!(
             lines[1..4],
             [
-                "● Explore where main is",
-                "  ⎿ Find **/*.rs",
+                "↳ explore where main is",
+                "  └ Find **/*.rs",
                 "    Search fn main"
             ]
         );
         assert!(
-            lines[4].starts_with("    Done · 2 tool calls · "),
+            lines[4].starts_with("    Reported · 2 tool calls · "),
             "{lines:?}"
         );
     }
@@ -1136,18 +1466,18 @@ mod tests {
         let report =
             "Chunk ID: a\nWall time: 0.1 seconds\nProcess exited with code 2\nOutput:\nerror: no\n";
         let lines = finished("exec_command", json!({"cmd": "cargo test"}), report);
-        assert_eq!(lines, ["", "● Run cargo test", "  ⎿ Exit 2 · error: no"]);
+        assert_eq!(lines, ["", "$ cargo test", "  └ Exit 2 · error: no"]);
         let report = "Chunk ID: a\nWall time: 10 seconds\nProcess running with session ID 3\nOutput:\nready\n";
         let input = json!({"cmd": "npm run dev", "sandbox_permissions": "require_escalated"});
         let lines = finished("exec_command", input, report);
-        assert_eq!(lines[1], "● Run npm run dev  (outside the sandbox)");
-        assert_eq!(lines[2], "  ⎿ Running in the background as 3 · ready");
+        assert_eq!(lines[1], "$ npm run dev  (outside the sandbox)");
+        assert_eq!(lines[2], "  └ Running in the background as 3 · ready");
         let lines = finished(
             "write_stdin",
             json!({"session_id": 3, "chars": "\u{3}"}),
             "Process exited with code 130\nOutput:\n",
         );
-        assert_eq!(lines[1], "● Input interrupt 3");
+        assert_eq!(lines[1], "$ Input interrupt 3");
     }
 
     #[test]
@@ -1162,13 +1492,12 @@ mod tests {
             lines,
             [
                 "",
-                "● Patch src/a.rs, b.md",
-                "  ⎿ ~ src/a.rs",
+                "✎ Edited src/a.rs, b.md +2 −1",
+                "    src/a.rs",
                 "    -    old();",
                 "    +    new();",
-                "    + b.md",
+                "    new b.md",
                 "    +# B",
-                "    Updated 2 files"
             ]
         );
     }
@@ -1184,11 +1513,10 @@ mod tests {
         assert_eq!(
             lines[1..],
             [
-                "● Plan",
-                "  ⎿ ☑ Read the code",
-                "    ◐ Fix the bug",
-                "    ☐ Run the tests",
-                "    Plan updated"
+                "☰ Plan 1/3",
+                "  ✓ Read the code",
+                "  ● Fix the bug",
+                "  ○ Run the tests",
             ]
         );
     }
@@ -1230,12 +1558,20 @@ mod tests {
             usage: Usage::default(),
         });
         let items = view.take_committed();
-        assert_eq!(items[0], Item::Assistant("Let me look.".into()));
-        assert!(matches!(&items[1], Item::Tool(tool) if tool.summary == "fn main"));
+        assert_eq!(items[0], Item::answer("Let me look."));
+        // A search, with the reads and searches after it, is one item once something else comes.
+        assert!(matches!(&items[1], Item::Explored(calls) if calls[0].summary == "fn main"));
         assert_eq!(items[2], Item::Notice(Level::Error, "error: boom".into()));
         assert!(!view.is_busy());
-        let lines: Vec<String> = items[1].lines(40).iter().map(Line::to_string).collect();
-        assert_eq!(lines, ["", "● Search fn main", "  ⎿ 2 matching lines"]);
+        let lines: Vec<String> = items[1].lines(60).iter().map(Line::to_string).collect();
+        assert_eq!(
+            lines,
+            [
+                "",
+                "◇ Explored · 1 search",
+                "  └ search fn main · 2 matching lines"
+            ]
+        );
         view.show_tools();
         let details = view.take_committed();
         assert!(
@@ -1280,7 +1616,7 @@ mod tests {
                     text: thought.into(),
                     seconds: Some(0)
                 },
-                Item::Assistant("One.".into())
+                Item::answer("One.")
             ]
         );
         let lines: Vec<String> = items[0].lines(80).iter().map(Line::to_string).collect();
@@ -1297,14 +1633,25 @@ mod tests {
         delta(&mut view, "```\nAfter.", false);
         assert_eq!(
             view.take_committed(),
-            [Item::Assistant("```\na\n\nb\n```".into())]
+            [Item::Assistant {
+                text: "```\na\n\nb\n```".into(),
+                update: false,
+                opens: false
+            }]
         );
         view.apply(&Event::MessageAppended {
             turn: turn.clone(),
             message: Message::assistant("ignored"),
             usage: None,
         });
-        assert_eq!(view.take_committed(), [Item::Assistant("After.".into())]);
+        assert_eq!(
+            view.take_committed(),
+            [Item::Assistant {
+                text: "After.".into(),
+                update: false,
+                opens: false
+            }]
+        );
         assert!(view.live_lines(40, 10).is_empty());
         // Reasoning that ends in a tool call, with no answer, collapses as well.
         delta(&mut view, "Look at the file.", true);
@@ -1316,6 +1663,90 @@ mod tests {
         assert!(
             matches!(&view.take_committed()[..], [Item::Reasoning { text, .. }] if text == "Look at the file.")
         );
+    }
+
+    #[test]
+    fn updates_are_marked_and_dim_and_the_answer_is_not() {
+        let mut view = View::new();
+        let turn = "t".to_owned();
+        let start = |view: &mut View, phase| {
+            view.apply(&Event::MessageStarted {
+                turn: turn.clone(),
+                phase,
+            })
+        };
+        let text = |view: &mut View, text: &str| {
+            view.apply(&Event::TextDelta {
+                turn: turn.clone(),
+                text: text.into(),
+            })
+        };
+        start(&mut view, Some(Phase::Commentary));
+        text(&mut view, "Looking.\n\nStill looking.\n\n");
+        start(&mut view, Some(Phase::FinalAnswer));
+        text(&mut view, "Done.");
+        view.apply(&Event::MessageAppended {
+            turn: turn.clone(),
+            message: Message::assistant("Looking. Done."),
+            usage: None,
+        });
+        let items = view.take_committed();
+        let lines =
+            |item: &Item| -> Vec<String> { item.lines(40).iter().map(Line::to_string).collect() };
+        // The update's first line is marked, the rest lined up under it.
+        assert_eq!(
+            lines(&items[0])[1..],
+            ["• Looking.", "", "  Still looking."]
+        );
+        assert_eq!(items[1], Item::answer("Done."));
+        assert_eq!(lines(&items[1])[1], "Done.");
+        assert_eq!(items[0].lines(40)[1].spans[1].style.fg, theme().dim);
+    }
+
+    #[test]
+    fn reads_and_searches_group_until_something_else_comes() {
+        let mut view = View::new();
+        let turn = "t".to_owned();
+        for (id, name, input) in [
+            ("1", "grep", json!({"pattern": "fn main"})),
+            ("2", "read", json!({"path": "src/main.rs"})),
+        ] {
+            view.apply(&Event::ActionStarted {
+                turn: turn.clone(),
+                call_id: id.into(),
+                name: name.into(),
+                input,
+            });
+            view.apply(&Event::ActionResult {
+                turn: turn.clone(),
+                call_id: id.into(),
+                name: name.into(),
+                output: "a\nb".into(),
+                is_error: false,
+            });
+        }
+        // Live while it goes on, then one item.
+        assert!(view.take_committed().is_empty());
+        assert_eq!(
+            view.running_lines(60)[0].to_string(),
+            "◇ Exploring · 1 search, 1 read"
+        );
+        view.apply(&Event::ActionStarted {
+            turn: turn.clone(),
+            call_id: "3".into(),
+            name: "apply_patch".into(),
+            input: json!({"input": "*** Begin Patch\n*** Update File: src/main.rs\n-a\n+b\n+c\n*** End Patch"}),
+        });
+        view.apply(&Event::ActionResult {
+            turn,
+            call_id: "3".into(),
+            name: "apply_patch".into(),
+            output: "M src/main.rs".into(),
+            is_error: false,
+        });
+        let items = view.take_committed();
+        assert!(matches!(&items[..], [Item::Explored(calls), Item::Tool(_)] if calls.len() == 2));
+        assert_eq!(view.changes().get("src/main.rs"), Some(&(2, 1)));
     }
 
     #[test]

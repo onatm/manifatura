@@ -9,9 +9,11 @@ pub(crate) mod logs;
 mod models;
 mod rewind;
 mod screen;
+mod sidebar;
 mod skills;
 mod tasks;
 mod text;
+pub(crate) mod theme;
 mod view;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -92,6 +94,16 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "the skills: who sees each; start one with /skill:name",
     ),
     ("/help", "", "what the keys and commands do"),
+    (
+        "/theme",
+        "[name]",
+        "the colours: dark, light, terminal or one of yours",
+    ),
+    (
+        "/sidebar",
+        "",
+        "show or hide the sidebar: plan, changes, tasks, servers (Ctrl-B)",
+    ),
     ("/exit", "", "quit rho"),
     ("/quit", "", "quit rho"),
 ];
@@ -185,6 +197,9 @@ struct App {
     context: Option<(u64, Option<u32>)>,
     model: String,
     effort: Option<Effort>,
+    /// Whether the sidebar shows, and your themes, for `/theme`.
+    sidebar: bool,
+    themes: theme::Themes,
 }
 
 /// What a one-line input could complete to: the commands and skills it begins, or after `/resume `, the sessions.
@@ -193,23 +208,29 @@ fn completions(
     sessions: &[SessionMeta],
     agents: &[(String, String)],
     skills: &[Skill],
-    levels: &[(String, String)],
+    choices: &[(&str, Vec<(String, String)>)],
 ) -> Vec<Completion> {
     if !line.starts_with('/') {
         return Vec::new();
     }
-    if let Some(partial) = line.strip_prefix("/effort ") {
-        let partial = partial.trim().to_lowercase();
-        return levels
-            .iter()
-            .filter(|(level, _)| level.starts_with(&partial) && *level != partial)
-            .map(|(level, about)| Completion {
-                text: format!("/effort {level}"),
-                label: level.clone(),
-                about: about.clone(),
-                runs: true,
-            })
-            .collect();
+    // A command's argument from a short list: `/effort high`, `/theme light`.
+    for (command, options) in choices {
+        if let Some(partial) = line
+            .strip_prefix(command)
+            .and_then(|rest| rest.strip_prefix(' '))
+        {
+            let partial = partial.trim().to_lowercase();
+            return options
+                .iter()
+                .filter(|(option, _)| option.starts_with(&partial) && *option != partial)
+                .map(|(option, about)| Completion {
+                    text: format!("{command} {option}"),
+                    label: option.clone(),
+                    about: about.clone(),
+                    runs: true,
+                })
+                .collect();
+        }
     }
     if let Some(partial) = line.strip_prefix("/resume ") {
         let partial = partial.trim();
@@ -522,6 +543,8 @@ impl App {
             context: None,
             model: options.model.clone().unwrap_or_default(),
             effort: options.effort,
+            sidebar: options.sidebar,
+            themes: options.themes.clone(),
         }
     }
 
@@ -931,6 +954,8 @@ impl App {
                 self.quit = true
             }
             (KeyCode::Char('l'), true) if self.logs => self.logs_open = !self.logs_open,
+            (KeyCode::Char('b'), true) => self.sidebar = !self.sidebar,
+            (KeyCode::Char('o'), true) => self.view.show_tools(),
             (KeyCode::Esc, _) if self.view.is_busy() => self.interrupt(),
             (KeyCode::Enter, _) => {
                 let newline = key
@@ -1130,7 +1155,10 @@ impl App {
                     &self.sessions,
                     &agents,
                     &skills,
-                    &self.effort_choices(),
+                    &[
+                        ("/effort", self.effort_choices()),
+                        ("/theme", self.theme_choices()),
+                    ],
                 )
             }
             _ => Vec::new(),
@@ -1252,12 +1280,21 @@ impl App {
                 "Enter sends (while the agent works, before its next step) · Shift+Enter inserts a line · @ picks a file · \
                  Tab completes · Esc or Ctrl-C stops the agent · Ctrl-D or Ctrl-C twice quits · Up and Down recall what \
                  you sent · on an empty composer, ↓ lists the background tasks and ← → move between the session and its subagents · \
+                 Ctrl-O shows this turn's tool output in full · Ctrl-B shows or hides the sidebar · \
                  with --logs, click logs (or Ctrl-L) for the log",
             );
             return;
         }
         if command == "/tools" {
             self.view.show_tools();
+            return;
+        }
+        if command == "/sidebar" {
+            self.sidebar = !self.sidebar;
+            return;
+        }
+        if command == "/theme" {
+            self.switch_theme(argument);
             return;
         }
         if command == "/status" {
@@ -1772,6 +1809,51 @@ impl App {
             .and_then(|ready| default_effort(&ready.models, &self.model))
     }
 
+    /// What `/theme` completes to: the built-in themes, then yours.
+    fn theme_choices(&self) -> Vec<(String, String)> {
+        theme::BUILT_IN
+            .iter()
+            .map(|(name, about)| ((*name).to_owned(), (*about).to_owned()))
+            .chain(self.themes.iter().map(|(name, colours)| {
+                let base = colours.get("base").map_or("dark", String::as_str);
+                (name.clone(), format!("yours, over {base}"))
+            }))
+            .collect()
+    }
+
+    /// `/theme`: lists the themes, or switches to one and saves it as yours.
+    fn switch_theme(&mut self, name: &str) {
+        if name.is_empty() {
+            let current = theme::name();
+            for (name, about) in self.theme_choices() {
+                let mark = if name == current { "● " } else { "  " };
+                self.view
+                    .notice(Level::Info, format!("{mark}{name:<12}{about}"));
+            }
+            return;
+        }
+        match theme::resolve(Some(name), &self.themes) {
+            Err(problem) => self.view.notice(Level::Warn, problem),
+            Ok((colours, name)) => {
+                theme::set(colours, &name);
+                let saved = self
+                    .ready
+                    .as_ref()
+                    .map(|ready| crate::paths::save_theme(&ready.config_path, &name));
+                self.view.notice(
+                    Level::Info,
+                    format!("theme {name}, from here on and in new sessions"),
+                );
+                if let Some(Err(error)) = saved {
+                    self.view.notice(
+                        Level::Warn,
+                        format!("could not save it to your config: {error:#}"),
+                    );
+                }
+            }
+        }
+    }
+
     /// What `/effort` completes to: `default` (naming the level it is), then the model's levels.
     fn effort_choices(&self) -> Vec<(String, String)> {
         let default = self.default_effort().map(|effort| {
@@ -1861,6 +1943,8 @@ mod tests {
             notices: Vec::new(),
             logs: false,
             mouse: false,
+            themes: Default::default(),
+            sidebar: false,
             context_window: None,
         };
         App::new(PathBuf::from("."), &options)
@@ -2011,7 +2095,8 @@ mod tests {
             assert_eq!(buf[(2, top + 2)].symbol(), "1");
             assert_eq!(buf[(2, top + 3)].symbol(), "1");
         }
-        assert!(buf[(0, 2)].modifier.contains(Modifier::DIM));
+        // Sent and draft, the chevron is rho's colour.
+        assert_eq!(buf[(0, 2)].fg, theme::theme().accent);
         assert!(buf[(0, height - 5)].modifier.contains(Modifier::BOLD));
     }
 
@@ -2082,11 +2167,40 @@ mod tests {
     }
 
     #[test]
+    fn the_sidebar_opens_beside_the_composer_on_a_wide_terminal() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = loading_app();
+        app.context = Some((100_000, Some(400_000)));
+        app.view.apply(&Event::ActionStarted {
+            turn: "t".into(),
+            call_id: "1".into(),
+            name: "update_plan".into(),
+            input: serde_json::json!({"plan": [
+                {"step": "Read", "status": "completed"},
+                {"step": "Fix", "status": "in_progress"}
+            ]}),
+        });
+        let draw = |app: &mut App, width: u16| {
+            let height = app.pane_height(width, 40);
+            let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
+            term.draw(|f| app.draw(f)).unwrap();
+            term.backend().to_string()
+        };
+        assert!(!draw(&mut app, 120).contains("SESSION"));
+        app.sidebar = true;
+        let screen = draw(&mut app, 120);
+        for text in ["SESSION", "gpt-test · high", "25%", "PLAN 1/2", "● Fix"] {
+            assert!(screen.contains(text), "{text}: {screen}");
+        }
+        // Too narrow, it stays shut.
+        assert!(!draw(&mut app, 80).contains("SESSION"));
+    }
+
+    #[test]
     fn a_filling_window_turns_the_context_share_yellow_then_red() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
-        use ratatui::style::Color;
-
         let mut app = loading_app();
         let colour = |app: &mut App| {
             let mut term = Terminal::new(TestBackend::new(100, 8)).unwrap();
@@ -2100,12 +2214,13 @@ mod tests {
             let x = text[..at].chars().count() as u16 - 1;
             buffer[(x, row)].fg
         };
+        let theme = theme::theme();
         app.context = Some((100_000, Some(272_000)));
-        assert_eq!(colour(&mut app), Color::Reset);
+        assert_eq!(colour(&mut app), theme.ok);
         app.context = Some((230_000, Some(272_000)));
-        assert_eq!(colour(&mut app), Color::Yellow);
+        assert_eq!(colour(&mut app), theme.warn);
         app.context = Some((262_000, Some(272_000)));
-        assert_eq!(colour(&mut app), Color::Red);
+        assert_eq!(colour(&mut app), theme.error);
     }
 
     #[test]
@@ -2230,13 +2345,24 @@ mod tests {
                 .map(|(e, about)| (effort_label(Some(e)), about))
                 .chain([("default".into(), String::new())])
                 .collect();
-            completions(line, &sessions, &[], &[], &levels)
-                .into_iter()
-                .map(|c| c.text)
-                .collect()
+            let themes: Vec<(String, String)> = theme::BUILT_IN
+                .iter()
+                .map(|(name, about)| ((*name).to_owned(), (*about).to_owned()))
+                .collect();
+            completions(
+                line,
+                &sessions,
+                &[],
+                &[],
+                &[("/effort", levels.clone()), ("/theme", themes)],
+            )
+            .into_iter()
+            .map(|c| c.text)
+            .collect()
         };
         assert_eq!(names("/re"), ["/resume ", "/rewind"]);
-        assert_eq!(names("/s"), ["/sessions", "/status", "/skills"]);
+        assert_eq!(names("/s"), ["/sessions", "/status", "/skills", "/sidebar"]);
+        assert_eq!(names("/theme l"), ["/theme light"]);
         assert_eq!(
             names("/"),
             COMMANDS

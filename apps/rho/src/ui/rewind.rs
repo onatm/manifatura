@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
-use super::view::{clip, copper, dim};
+use super::view::{accent, clip, dim};
 
 /// A message to go back to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,12 +118,12 @@ impl Rewind {
         let mut rows = Vec::new();
         match self.choosing {
             None => {
-                rows.push(Line::styled("Rewind to before a message", copper()));
+                rows.push(Line::styled("Rewind to before a message", accent()));
                 let count = height.saturating_sub(2).max(1);
                 let first = (self.selected + 1).saturating_sub(count);
                 for (i, p) in self.points.iter().enumerate().skip(first).take(count) {
                     let (mark, style) = if i == self.selected {
-                        ("› ", copper())
+                        ("› ", accent())
                     } else {
                         ("  ", Style::new())
                     };
@@ -155,7 +155,7 @@ impl Rewind {
                 ));
                 for (i, option) in self.options().into_iter().enumerate() {
                     let (mark, style) = if i == chosen {
-                        ("› ", copper())
+                        ("› ", accent())
                     } else {
                         ("  ", Style::new())
                     };

@@ -11,10 +11,10 @@ use manifatura::exec::ProcessInfo;
 use manifatura::{Outcome, SessionId};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::view::{clip, copper, dim};
+use super::view::{accent, clip, dim};
 use super::{App, Level, View};
 
 /// How much of a command's output the panel reads, from its end.
@@ -254,7 +254,7 @@ impl App {
                         ),
                         width,
                     ),
-                    copper(),
+                    accent(),
                 ));
                 let room = height.saturating_sub(2);
                 let output = tail(&p.output, room);
@@ -273,13 +273,13 @@ impl App {
                 rows.push(Line::styled("Esc back", dim()));
             }
             None => {
-                rows.push(Line::styled("Background tasks", copper()));
+                rows.push(Line::styled("Background tasks", accent()));
                 let count = height.saturating_sub(2).max(1);
                 let selected = tasks.selected.min(list.len().saturating_sub(1));
                 let first = (selected + 1).saturating_sub(count);
                 for (i, task) in list.iter().enumerate().skip(first).take(count) {
                     let (mark, style) = if i == selected {
-                        ("› ", copper())
+                        ("› ", accent())
                     } else {
                         ("  ", Style::new())
                     };
@@ -301,7 +301,7 @@ impl App {
                         }
                     };
                     let state_style = if state.starts_with("running") {
-                        Style::new().fg(Color::Green)
+                        super::theme::ok()
                     } else {
                         dim()
                     };

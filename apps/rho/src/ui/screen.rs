@@ -273,8 +273,8 @@ mod tests {
         let pane = Rect::new(0, 5, 50, 4);
         let mut backend = TestBackend::new(50, 9);
         let mut transcript = Transcript::default();
-        let item = Item::Assistant(
-            (0..9)
+        let item = Item::answer(
+            &(0..9)
                 .map(|i| format!("code line {i}"))
                 .collect::<Vec<_>>()
                 .join("\n\n"),

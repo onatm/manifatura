@@ -1,7 +1,7 @@
 //! Wrapping styled text to lines of a known count, which writing into the terminal's scrollback needs, and
 //! markdown through `tui-markdown`.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use tui_markdown::{Options, StyleSheet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -112,7 +112,7 @@ impl StyleSheet for ChatMarkdown {
     }
 
     fn code(&self) -> Style {
-        Style::new().fg(Color::Reset)
+        super::theme::info()
     }
 
     fn code_block_fence(&self) -> &str {

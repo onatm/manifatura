@@ -2,13 +2,15 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Padding};
 use tracing::Level as LogLevel;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::view::{clip, copper, dim, prompt_text_width, tokens, user_message_style};
+use super::sidebar::{WIDTH as SIDEBAR, meter};
+use super::theme::{error, selected, warn};
+use super::view::{accent, clip, dim, prompt_text_width, tokens, user_message_style};
 use super::{Activity, App, LOG_BUTTON, LOG_PANEL, SPINNER, ago};
 
 /// Take rows from the top of the remaining area.
@@ -69,7 +71,13 @@ impl App {
         };
         let extras = logs + self.completions().len() + usize::from(self.files.hint().is_some());
         // Leave a blank row between the transcript and the controls when space permits.
-        (editor + 2 + extras.min(usize::from(limit)) as u16).min(limit)
+        let rows = (editor + 2 + extras.min(usize::from(limit)) as u16).min(limit);
+        if self.sidebar_shown(width) {
+            // The sidebar takes as many rows as it has, up to half the screen, above the footer.
+            let wanted = self.sidebar_lines().len() as u16 + 2;
+            return rows.max(wanted.min(height / 2).min(height.saturating_sub(2)));
+        }
+        rows
     }
 
     fn editor_rows(&self, width: u16) -> u16 {
@@ -124,6 +132,24 @@ impl App {
             self.draw_tasks(f, rows);
             return;
         }
+        // The footer spans the width; the sidebar, when it shows, takes the right of the rows above it.
+        let footer_row = (rows.height >= 2).then(|| {
+            rows.height -= 1;
+            Rect {
+                y: rows.bottom(),
+                height: 1,
+                ..rows
+            }
+        });
+        if self.sidebar_shown(rows.width) {
+            let side = Rect {
+                x: rows.right() - SIDEBAR,
+                width: SIDEBAR,
+                ..rows
+            };
+            rows.width -= SIDEBAR + 1;
+            self.draw_sidebar(f, side);
+        }
         let width = rows.width as usize;
         // Budget the editor first. Suggestions and logs only use spare rows.
         let reserved = if self.files.active() && rows.height >= 4 {
@@ -131,10 +157,10 @@ impl App {
         } else {
             0
         };
-        let editor = self.editor_rows(rows.width).min(rows.height - reserved);
+        let editor = self
+            .editor_rows(rows.width)
+            .min(rows.height.saturating_sub(reserved));
         let mut spare = rows.height - editor;
-        let footer = spare.min(1);
-        spare -= footer;
         let completions = self.completions();
         let hint = self.files.hint();
         let menu = (completions.len() + usize::from(hint.is_some())).min(spare as usize) as u16;
@@ -159,10 +185,14 @@ impl App {
             .take(menu as usize)
         {
             let (mark, style) = if i == picked {
-                ("› ", copper())
+                ("› ", accent())
             } else {
                 ("  ", Style::new())
             };
+            let row = take(&mut rows, 1);
+            if i == picked {
+                f.render_widget(Line::styled(" ".repeat(row.width.into()), selected()), row);
+            }
             let line = if self.files.active() {
                 Line::styled(
                     format!(
@@ -177,7 +207,7 @@ impl App {
                     Span::styled(completion.about.as_str(), dim()),
                 ])
             };
-            f.render_widget(line, take(&mut rows, 1));
+            f.render_widget(line, row);
         }
         if logs > 0 {
             f.render_widget(
@@ -196,8 +226,8 @@ impl App {
                 .skip(self.log.len().saturating_sub(usize::from(logs - 1)))
             {
                 let style = match line.level {
-                    LogLevel::ERROR => Style::new().fg(Color::Red),
-                    LogLevel::WARN => Style::new().fg(Color::Yellow),
+                    LogLevel::ERROR => error(),
+                    LogLevel::WARN => warn(),
                     _ => dim(),
                 };
                 f.render_widget(
@@ -207,7 +237,9 @@ impl App {
             }
         }
         self.draw_composer(f, take(&mut rows, editor));
-        self.draw_footer(f, take(&mut rows, footer));
+        if let Some(footer) = footer_row {
+            self.draw_footer(f, footer);
+        }
     }
 
     fn draw_sessions(&mut self, f: &mut Frame, mut rows: Rect, selected: usize) {
@@ -216,7 +248,7 @@ impl App {
         let unused = rows.height - needed;
         take(&mut rows, unused);
         f.render_widget(
-            Line::styled("Resume a session", copper()),
+            Line::styled("Resume a session", accent()),
             take(&mut rows, 1),
         );
         let count = usize::from(rows.height.saturating_sub(1));
@@ -224,7 +256,7 @@ impl App {
         let current = self.ready.as_ref().map(|ready| ready.session.id());
         for (i, session) in self.sessions.iter().enumerate().skip(first).take(count) {
             let (mark, style) = if selected == i {
-                ("› ", copper())
+                ("› ", accent())
             } else {
                 ("  ", Style::new())
             };
@@ -255,10 +287,7 @@ impl App {
         let inner = block.inner(area);
         f.render_widget(block, area);
         let gutter = inner.width.min(2);
-        f.render_widget(
-            Span::styled("›", Style::new().add_modifier(Modifier::BOLD)),
-            inner,
-        );
+        f.render_widget(Span::styled("›", accent()), inner);
         let width = (prompt_text_width(inner.width.into()) as u16).min(inner.width - gutter);
         if width == 0 {
             return;
@@ -313,7 +342,7 @@ impl App {
             return Line::default();
         }
         if self.armed {
-            return Line::styled("Press Ctrl-C again to quit", Style::new().fg(Color::Yellow));
+            return Line::styled("Press Ctrl-C again to quit", warn());
         }
         let label = if self.ready.is_none() {
             "Connecting to ChatGPT…".into()
@@ -329,7 +358,7 @@ impl App {
             format!(" · {}s", since.elapsed().as_secs())
         });
         Line::from(vec![
-            Span::styled(format!("{} ", SPINNER[self.tick % SPINNER.len()]), copper()),
+            Span::styled(format!("{} ", SPINNER[self.tick % SPINNER.len()]), accent()),
             Span::raw(clip(
                 &label,
                 width.saturating_sub(2 + Line::raw(&time).width()),
@@ -366,18 +395,13 @@ impl App {
             self.model.clone(),
             format!("{} effort", self.effort_label()),
         ];
-        // A window filling up shows: yellow from 80%, red from 95%.
+        // The context as a meter, coloured as it fills: from 80% and from 95%.
         let mut warn = None;
         match self.context {
             Some((used, Some(window))) => {
-                let share = used * 100 / u64::from(window).max(1);
-                parts.push(format!("{share}% context"));
-                warn = match share {
-                    95.. => Some(Color::Red),
-                    80.. => Some(Color::Yellow),
-                    _ => None,
-                }
-                .map(|color| (parts.len() - 1, color));
+                let (bar, style) = meter(used, window, 8);
+                parts.push(format!("{bar} context"));
+                warn = Some((parts.len() - 1, style));
             }
             Some((used, None)) => parts.push(format!("{} context", tokens(used))),
             None => {}
@@ -408,7 +432,7 @@ impl App {
         };
         let warn = warn
             .filter(|_| viewing.is_none())
-            .map(|(i, color)| (at(&parts, i), parts[i].clone(), color));
+            .map(|(i, style)| (at(&parts, i), parts[i].clone(), style));
         // The tasks label answers clicks.
         self.tasks_button = tasks_at
             .filter(|_| viewing.is_none())
@@ -447,9 +471,9 @@ impl App {
             button.width = button.width.min(body.right().saturating_sub(button.x));
         }
         f.render_widget(Line::styled(left, dim()), body);
-        if let Some((mut area, text, color)) = warn.filter(|_| !replaced) {
+        if let Some((mut area, text, style)) = warn.filter(|_| !replaced) {
             area.width = area.width.min(body.right().saturating_sub(area.x));
-            f.render_widget(Line::styled(text, Style::new().fg(color)), area);
+            f.render_widget(Line::styled(text, style), area);
         }
     }
 }

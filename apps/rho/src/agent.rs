@@ -84,6 +84,9 @@ pub(crate) struct ChatOptions {
     pub(crate) logs: bool,
     /// Take the mouse for clicks, which also takes the scroll wheel from the terminal.
     pub(crate) mouse: bool,
+    /// Your themes, to switch between with `/theme`, and whether the sidebar starts open.
+    pub(crate) themes: crate::ui::theme::Themes,
+    pub(crate) sidebar: bool,
     /// The context window compaction measures against, instead of the model's own.
     pub(crate) context_window: Option<u32>,
     /// Your rules, other agents' folders to read, and settings for subagents, from `config.toml`.
