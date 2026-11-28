@@ -23,7 +23,8 @@ impl Ws {
         let env = Arc::new(Local::new(&dir).unwrap());
         let dir = std::fs::canonicalize(&dir).unwrap();
         Self {
-            snapshots: Snapshots::new(root.join("snapshots.git")),
+            // Its parents do not exist yet, as an app's data directory may not.
+            snapshots: Snapshots::new(root.join("data/app/snapshots.git")),
             root,
             dir,
             env,

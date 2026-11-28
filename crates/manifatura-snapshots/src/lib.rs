@@ -175,16 +175,17 @@ impl Snapshots {
         if env.stat(&self.dir.join("HEAD")).await?.is_some() {
             return Ok(());
         }
-        self.git(env, &["init", "--quiet"]).await.map(|_| ())
+        // `git --git-dir X init` will not create X's parents; `git init --bare X` does. The work tree is given on
+        // each call after, so a bare repository serves.
+        let dir = self.dir.to_string_lossy().into_owned();
+        let argv = ["git", "init", "--quiet", "--bare", &dir];
+        self.run(env, argv.map(String::from).to_vec(), "init")
+            .await
+            .map(|_| ())
     }
 
     /// Runs `git` on the snapshot repository, with the env's working directory as its work tree; its stdout.
     async fn git(&self, env: &dyn Env, args: &[&str]) -> io::Result<String> {
-        let id = manifatura_agent::new_id();
-        let (out, err) = (
-            env.temp_dir().join(format!("snapshot-{}.out", &id[..12])),
-            env.temp_dir().join(format!("snapshot-{}.err", &id[..12])),
-        );
         let dir = self.dir.to_string_lossy().into_owned();
         let work = env.cwd().to_string_lossy().into_owned();
         let mut argv: Vec<String> = [
@@ -204,6 +205,17 @@ impl Snapshots {
         .map(|s| s.to_string())
         .collect();
         argv.extend(args.iter().map(|s| s.to_string()));
+        self.run(env, argv, args.first().copied().unwrap_or_default())
+            .await
+    }
+
+    /// Runs `argv`, the git command `command`, in the env; its stdout.
+    async fn run(&self, env: &dyn Env, argv: Vec<String>, command: &str) -> io::Result<String> {
+        let id = manifatura_agent::new_id();
+        let (out, err) = (
+            env.temp_dir().join(format!("snapshot-{}.out", &id[..12])),
+            env.temp_dir().join(format!("snapshot-{}.err", &id[..12])),
+        );
         let mut p = env
             .exec(ExecSpec {
                 argv,
@@ -224,7 +236,7 @@ impl Snapshots {
         if code != 0 {
             return Err(io::Error::other(format!(
                 "git {} failed: {}",
-                args.first().unwrap_or(&""),
+                command,
                 stderr.trim()
             )));
         }
