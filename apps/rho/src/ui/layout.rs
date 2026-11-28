@@ -55,6 +55,9 @@ impl App {
         if let Some(tasks) = &self.tasks {
             return self.tasks_height(tasks, height, limit);
         }
+        if let Some(pick) = &self.skills_pick {
+            return pick.height(width, limit);
+        }
         let editor = self.editor_rows(width);
         let logs = if self.logs_open {
             self.log.len().clamp(1, LOG_PANEL) + 1
@@ -100,6 +103,12 @@ impl App {
             return;
         }
         self.task_rows.clear();
+        if let Some(pick) = &self.skills_pick {
+            self.log_button = None;
+            self.tasks_button = None;
+            pick.draw(f, rows);
+            return;
+        }
         if self.tasks.is_some() {
             self.log_button = None;
             self.tasks_button = None;

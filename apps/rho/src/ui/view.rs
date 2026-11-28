@@ -973,21 +973,38 @@ pub(crate) fn tokens(n: u64) -> String {
     }
 }
 
-/// What `/explore` sends the agent once the subagent has reported: the report, then the question.
-pub(crate) fn explore_message(question: &str, report: &str) -> String {
+/// What `/name task` sends the agent once the subagent has reported: the report, then the task.
+pub(crate) fn agent_message(agent: &str, task: &str, report: &str) -> String {
     format!(
-        "<explore_report>\n{}\n</explore_report>\n\n{EXPLORE_NOTE}\n\n{question}",
-        report.trim()
+        "<agent_report name=\"{agent}\">\n{}\n</agent_report>\n\n{}\n\n{task}",
+        report.trim(),
+        agent_note(agent)
     )
 }
 
+/// What the agent is told of a report a subagent wrote for the user.
+fn agent_note(agent: &str) -> String {
+    format!(
+        "The {agent} subagent worked on my request; its report is above. Answer from it, and check something \
+         yourself only where it left it unclear."
+    )
+}
+
+/// The note of an earlier version, which only `/explore` used, so that its sessions still show as typed.
 const EXPLORE_NOTE: &str = "The explore subagent looked into my question; its report is above. Answer from it, and read a \
                             file yourself only to check something it left unclear.";
 
-/// What the person typed for a user message: a skill started with `/name request` was sent as the skill's
-/// instructions and then the request, and shows as the command again; an `/explore` question with its report
-/// shows as the command.
+/// What the person typed for a user message: a skill started with `/skill:name request` was sent as the skill's
+/// instructions and then the request, and shows as the command again; a task handed to a subagent with
+/// `/name task`, sent with its report, shows as the command.
 pub(crate) fn typed(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix("<agent_report name=\"")
+        && let Some((agent, rest)) = rest.split_once("\">\n")
+        && let Some((_, after)) = rest.rsplit_once("\n</agent_report>\n\n")
+        && let Some(task) = after.strip_prefix(&agent_note(agent))
+    {
+        return format!("/{agent} {}", task.trim_start());
+    }
     if let Some(rest) = text.strip_prefix("<explore_report>\n")
         && let Some((_, after)) = rest.rsplit_once("\n</explore_report>\n\n")
         && let Some(question) = after.strip_prefix(EXPLORE_NOTE)
@@ -1007,8 +1024,8 @@ pub(crate) fn typed(text: &str) -> String {
         return text.to_owned();
     };
     match request == format!("Use the {name} skill.") {
-        true => format!("/{name}"),
-        false => format!("/{name} {request}"),
+        true => format!("/skill:{name}"),
+        false => format!("/skill:{name} {request}"),
     }
 }
 
@@ -1019,19 +1036,21 @@ mod tests {
         let sent = "<skill_content name=\"codebase-tour\">\nBody.\n</skill_content>\n\n";
         assert_eq!(
             super::typed(&format!("{sent}how does chat work?")),
-            "/codebase-tour how does chat work?"
+            "/skill:codebase-tour how does chat work?"
         );
         assert_eq!(
             super::typed(&format!("{sent}Use the codebase-tour skill.")),
-            "/codebase-tour"
+            "/skill:codebase-tour"
         );
         assert_eq!(super::typed("hello"), "hello");
         assert_eq!(
             super::typed(super::super::WAKE),
             "(a background command exited)"
         );
-        let sent = super::explore_message("where is main?", "main is in src/main.rs:1\n");
+        let sent = super::agent_message("explore", "where is main?", "main is in src/main.rs:1\n");
         assert_eq!(super::typed(&sent), "/explore where is main?");
+        let sent = super::agent_message("reviewer", "the last commit", "Looks fine.");
+        assert_eq!(super::typed(&sent), "/reviewer the last commit");
     }
 
     use super::*;

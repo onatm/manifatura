@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use manifatura::auth::openai::{Model, SignIn};
 use manifatura::exec::Exec;
-use manifatura::kit::context::{ContextFiles, SystemPrompt};
+use manifatura::kit::context::{ContextFile, ContextFiles, SystemPrompt};
 use manifatura::kit::{self, Approvals, Summarizer};
 use manifatura::policy::{Decision, Policy, Rules};
 use manifatura::providers::responses::Responses;
@@ -24,7 +24,7 @@ use manifatura::subagents::{Definition, Progress, Subagent, Subagents};
 use manifatura::tools::Local;
 use manifatura::{
     Abort, Agent, BoxStream, Effort, Env, Message, ModelInfo, ModelRequest, Provider, Runtime,
-    Session, SessionId, SessionMeta, Store, StreamEvent,
+    Session, SessionId, SessionMeta, Store, StreamEvent, Tool,
 };
 
 use crate::paths;
@@ -104,11 +104,14 @@ pub(crate) struct Prepared {
     pub(crate) store: Arc<JsonlStore>,
     /// The instruction files the prompt includes.
     pub(crate) files: Vec<PathBuf>,
-    /// The skills the prompt lists, which `/name` also starts.
+    /// The context files as loaded, and the directory, for building the prompt again.
+    pub(crate) context: Vec<ContextFile>,
+    pub(crate) cwd: PathBuf,
+    /// The skills the prompt lists, which `/skill:name` also starts.
     pub(crate) skills: SkillSet,
     /// The session whose turn last failed for want of room, even after a summary.
     pub(crate) overflowed: Overflowed,
-    /// The subagents behind the `task` tool, which `/explore` also starts.
+    /// The subagents behind the `task` tool, which `/name task` also starts.
     pub(crate) subagents: Subagents,
     /// What the running subagents do, event by event, for the screen to follow them.
     pub(crate) progress: Option<tokio::sync::mpsc::UnboundedReceiver<Progress>>,
@@ -284,16 +287,13 @@ pub(crate) async fn prepare(
         files = files.home(home);
     }
     let files = files.load(&*env).await;
-    let skills = skills.load(&*env).await;
+    let skills = skills
+        .load(&*env)
+        .await
+        .with_visibility(project.skills.clone());
     problems.extend(skills.warnings().iter().cloned());
     tools.extend(skills.tool());
-    let instructions = SystemPrompt::new(BASE.trim())
-        .tools(&tools)
-        .context_files(&files)
-        .skills(&skills)
-        .cwd(&cwd)
-        .date(today())
-        .build();
+    let instructions = instructions(&tools, &files, &skills, &cwd);
 
     // rho's own repository, outside the workspace: git writes there unsandboxed, which only rho asks for.
     let snapshots = Snapshots::new(paths::snapshots_dir(&cwd)).unsandboxed(true);
@@ -353,7 +353,9 @@ pub(crate) async fn prepare(
         session,
         history,
         store,
-        files: files.into_iter().map(|file| file.path).collect(),
+        files: files.iter().map(|file| file.path.clone()).collect(),
+        context: files,
+        cwd: cwd.clone(),
         skills,
         overflowed,
         subagents,
@@ -391,6 +393,34 @@ fn overflow_seen(overflowed: &Overflowed) -> manifatura::Hooks {
     })
 }
 
+/// The system prompt: rho's instructions, the tools' guidelines, the context files, the skills the model may
+/// load, the directory and the date.
+fn instructions(tools: &[Tool], files: &[ContextFile], skills: &SkillSet, cwd: &Path) -> String {
+    SystemPrompt::new(BASE.trim())
+        .tools(tools)
+        .context_files(files)
+        .skills(skills)
+        .cwd(cwd)
+        .date(today())
+        .build()
+}
+
+/// The agent again once the skills' visibility changed: its prompt and its skill tool. Sessions open already keep
+/// theirs; those opened from now get this one.
+pub(crate) fn with_skills(
+    agent: Agent,
+    files: &[ContextFile],
+    skills: &SkillSet,
+    cwd: &Path,
+) -> Agent {
+    let agent = match skills.tool() {
+        Some(tool) => agent.with_tool(tool),
+        None => agent.without_tool(manifatura::skills::SKILL_TOOL),
+    };
+    let text = instructions(agent.tool_list(), files, skills, cwd);
+    agent.with_instructions(text)
+}
+
 /// Where skills come from, a later source hiding an earlier one of the same name: other agents' folders when
 /// `compat` asks for them, `~/.agents/skills`, rho's own, then the project's `.agents/skills` from the repository
 /// root down to the working directory.
@@ -410,7 +440,7 @@ fn skill_sources(home: Option<&Path>, compat: &[paths::Compat]) -> Skills {
     skills.project(AGENTS_DIR)
 }
 
-/// The built-in subagents, for the `task` tool and `/explore`.
+/// The subagents: rho's own, yours and the project's, for the `task` tool and `/name task`.
 fn subagents(
     cwd: &Path,
     yours: &BTreeMap<String, paths::AgentConfig>,

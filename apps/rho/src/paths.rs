@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use manifatura::mcp::ServerConfig;
 use manifatura::policy::{Rule, Rules};
+use manifatura::skills::Visibility;
 use serde::Deserialize;
 use toml_edit::{Array, DocumentMut, Item, Table};
 
@@ -114,6 +115,9 @@ pub(crate) struct ProjectConfig {
     pub(crate) rules: Rules,
     #[serde(default)]
     pub(crate) agents: BTreeMap<String, AgentConfig>,
+    /// Who sees each skill in this project (`/skills` writes it): `name-only`, `user-only` or `off`.
+    #[serde(default)]
+    pub(crate) skills: BTreeMap<String, Visibility>,
 }
 
 fn read(path: &Path) -> Result<Option<String>> {
@@ -144,6 +148,29 @@ pub(crate) fn config() -> Result<Config> {
 /// The project's `.rho/config.toml`, under `cwd`.
 pub(crate) fn project_config(cwd: &Path) -> Result<ProjectConfig> {
     parse(&cwd.join(PROJECT_CONFIG))
+}
+
+/// Writes who sees each skill under `[skills]` in `path`, leaving out those that are on and keeping the rest of
+/// the file as it is.
+pub(crate) fn save_skills(path: &Path, visibility: &BTreeMap<String, Visibility>) -> Result<()> {
+    let mut doc: DocumentMut = read(path)?
+        .unwrap_or_default()
+        .parse()
+        .with_context(|| format!("reading {}", path.display()))?;
+    // A new table goes after the others, so the file keeps its order.
+    let mut table = Table::new();
+    table.set_position(Some(isize::MAX));
+    for (name, seen) in visibility {
+        if *seen != Visibility::On {
+            table.insert(name, toml_edit::value(seen.as_str()));
+        }
+    }
+    if table.is_empty() {
+        doc.remove("skills");
+    } else {
+        doc.insert("skills", Item::Table(table));
+    }
+    write(path, &doc.to_string())
 }
 
 /// Adds `rule` to the allow list under `[rules]` in `path`, keeping the rest of the file as it is.
@@ -327,6 +354,35 @@ mcp = ["exa"]
         );
         // A project may set rules and agents, nothing else.
         assert!(toml::from_str::<ProjectConfig>("model = \"m\"\n").is_err());
+    }
+
+    #[test]
+    fn skill_choices_are_saved_for_the_project() {
+        let dir = scratch("skill-choices");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "# ours\n[rules]\ndeny = []\n").unwrap();
+        let choices = BTreeMap::from([
+            ("deploy".to_string(), Visibility::Off),
+            ("tour".to_string(), Visibility::On),
+            ("legacy".to_string(), Visibility::NameOnly),
+        ]);
+        save_skills(&path, &choices).unwrap();
+        let project: ProjectConfig = parse(&path).unwrap();
+        assert_eq!(
+            project.skills,
+            BTreeMap::from([
+                ("deploy".to_string(), Visibility::Off),
+                ("legacy".to_string(), Visibility::NameOnly),
+            ])
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# ours")
+        );
+        save_skills(&path, &BTreeMap::new()).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("[skills]"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

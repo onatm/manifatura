@@ -8,11 +8,12 @@ mod layout;
 pub(crate) mod logs;
 mod rewind;
 mod screen;
+mod skills;
 mod tasks;
 mod text;
 mod view;
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,8 +40,9 @@ use self::approval::Ask;
 use self::logs::{LogLine, Logs};
 use self::rewind::{Outcome, Point, Restore, Rewind};
 use self::screen::ChatScreen;
+use self::skills::SkillsPicker;
 use self::tasks::{Action, Child, Tasks};
-use self::view::{Activity, Item, Level, View, dim, explore_message, tokens, typed};
+use self::view::{Activity, Item, Level, View, agent_message, dim, tokens, typed};
 use crate::agent::{
     ChatOptions, Prepared, ago, default_effort, effort_label, efforts, fit_effort, parse_effort,
     recent_sessions,
@@ -57,11 +59,6 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "/rewind",
         "",
         "go back to before a message: the code, the conversation or both",
-    ),
-    (
-        "/explore",
-        "<question>",
-        "hand a question about the code to the explore subagent",
     ),
     ("/model", "[model]", "the plan's models, or switch to one"),
     (
@@ -83,7 +80,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "show tool output from the current or last turn",
     ),
     ("/mcp", "", "the MCP servers and their tools"),
-    ("/skills", "", "the skills; start one with /name [request]"),
+    (
+        "/skills",
+        "",
+        "the skills: who sees each; start one with /skill:name",
+    ),
     ("/help", "", "what the keys and commands do"),
     ("/exit", "", "quit"),
 ];
@@ -151,8 +152,10 @@ struct App {
     events: Option<broadcast::Receiver<Event>>,
     approvals: Option<broadcast::Receiver<ApprovalEvent>>,
     commands: Option<broadcast::Receiver<ExecEvent>>,
-    /// A running `/explore`: its question, and what it reports.
-    exploring: Option<(String, mpsc::UnboundedReceiver<Explored>)>,
+    /// A subagent started with `/name task`: its name, the task, and what it reports.
+    exploring: Option<(String, String, mpsc::UnboundedReceiver<Explored>)>,
+    /// The `/skills` list, while it is open.
+    skills_pick: Option<SkillsPicker>,
     /// The session IDs of commands left running in the background.
     background: BTreeSet<u32>,
     /// The subagents this session started, oldest first, and what each running one does.
@@ -177,6 +180,7 @@ struct App {
 fn completions(
     line: &str,
     sessions: &[SessionMeta],
+    agents: &[(String, String)],
     skills: &[Skill],
     levels: &[(String, String)],
 ) -> Vec<Completion> {
@@ -226,10 +230,22 @@ fn completions(
             runs: argument.is_empty() || *name == "/resume",
         })
         .chain(
+            agents
+                .iter()
+                .map(|(agent, about)| (format!("/{agent}"), about))
+                .filter(|(name, _)| name.starts_with(line) && !is_command(name))
+                .map(|(name, about)| Completion {
+                    text: format!("{name} "),
+                    label: format!("{name} <task>"),
+                    about: about.clone(),
+                    runs: false,
+                }),
+        )
+        .chain(
             skills
                 .iter()
-                .map(|skill| (format!("/{}", skill.name), skill))
-                .filter(|(name, _)| name.starts_with(line) && !is_command(name))
+                .map(|skill| (format!("/skill:{}", skill.name), skill))
+                .filter(|(name, _)| name.starts_with(line))
                 .map(|(name, skill)| Completion {
                     text: format!("{name} "),
                     label: format!("{name} [request]"),
@@ -402,21 +418,21 @@ async fn rewind_points(session: &Session) -> Result<Vec<Point>> {
     Ok(points)
 }
 
-/// What a running `/explore` sends the screen: the lines it logs, then its report.
+/// What a subagent started with `/name task` sends the screen: the lines it logs, then its report.
 enum Explored {
     Line(String),
     Done(manifatura::ToolResult),
 }
 
-/// The turn and call ids `/explore` shows its work under, and its subagent.
-const EXPLORE: &str = "explore";
+/// The turn and call ids a subagent started with `/name task` shows its work under.
+const DELEGATED: &str = "delegated";
 
-/// The running `/explore`'s next message, or never when none runs.
+/// The running subagent's next message, or never when none runs.
 async fn recv_explored(
-    exploring: &mut Option<(String, mpsc::UnboundedReceiver<Explored>)>,
+    exploring: &mut Option<(String, String, mpsc::UnboundedReceiver<Explored>)>,
 ) -> Option<Explored> {
     match exploring {
-        Some((_, rx)) => rx.recv().await,
+        Some((_, _, rx)) => rx.recv().await,
         None => std::future::pending().await,
     }
 }
@@ -474,6 +490,7 @@ impl App {
             approvals: None,
             commands: None,
             exploring: None,
+            skills_pick: None,
             background: BTreeSet::new(),
             children: Vec::new(),
             progress: None,
@@ -617,7 +634,7 @@ impl App {
                 let label = self
                     .asked
                     .remove(&progress.call_id)
-                    .or_else(|| self.exploring.as_ref().map(|(q, _)| q.clone()))
+                    .or_else(|| self.exploring.as_ref().map(|(_, task, _)| task.clone()))
                     .unwrap_or_default();
                 self.children.push(Child {
                     id: progress.child.clone(),
@@ -771,6 +788,7 @@ impl App {
                     && self.resume_pick.is_none()
                     && self.rewind.is_none()
                     && self.tasks.is_none()
+                    && self.skills_pick.is_none()
                     && self.viewing.is_none() =>
             {
                 self.picked = 0;
@@ -809,6 +827,17 @@ impl App {
                 Some(Outcome::Go(point, restore)) => {
                     self.rewind = None;
                     self.rewind_to(point, restore).await;
+                }
+                None => {}
+            }
+            return;
+        }
+        if let Some(pick) = &mut self.skills_pick {
+            match pick.key(key) {
+                Some(skills::Outcome::Cancel) => self.skills_pick = None,
+                Some(skills::Outcome::Save(choices)) => {
+                    self.skills_pick = None;
+                    self.save_skills(choices);
                 }
                 None => {}
             }
@@ -923,6 +952,47 @@ impl App {
         }
     }
 
+    /// Saves who sees each skill for this project, and rebuilds the agent's prompt and skill tool for the sessions
+    /// opened from now; the `/skill:` menu follows at once.
+    fn save_skills(&mut self, choices: BTreeMap<String, manifatura::skills::Visibility>) {
+        let Some(ready) = &mut self.ready else { return };
+        let changed = choices
+            .iter()
+            .filter(|(name, seen)| ready.skills.visibility(name) != **seen)
+            .count();
+        if changed == 0 {
+            return;
+        }
+        let path = ready.cwd.join(crate::paths::PROJECT_CONFIG);
+        let mut all = match crate::paths::project_config(&ready.cwd) {
+            Ok(project) => project.skills,
+            Err(error) => {
+                self.view.notice(Level::Error, format!("{error:#}"));
+                return;
+            }
+        };
+        all.extend(choices);
+        if let Err(error) = crate::paths::save_skills(&path, &all) {
+            self.view.notice(Level::Error, format!("{error:#}"));
+            return;
+        }
+        ready.skills = ready.skills.clone().with_visibility(all);
+        ready.agent = crate::agent::with_skills(
+            ready.agent.clone(),
+            &ready.context,
+            &ready.skills,
+            &ready.cwd,
+        );
+        let plural = if changed == 1 { "" } else { "s" };
+        self.view.notice(
+            Level::Info,
+            format!(
+                "Updated {changed} skill{plural} in this project ({}); the model sees the change from the next session (/new)",
+                crate::paths::PROJECT_CONFIG
+            ),
+        );
+    }
+
     /// Does what the task panel asked.
     async fn act(&mut self, action: Action) {
         match action {
@@ -1012,11 +1082,25 @@ impl App {
             self.asks.is_empty() && !self.completions_hidden,
         ) {
             ([line], true) => {
-                let skills = self
-                    .ready
-                    .as_ref()
-                    .map_or(&[][..], |ready| ready.skills.skills());
-                completions(line, &self.sessions, skills, &self.effort_choices())
+                let (agents, skills): (Vec<(String, String)>, Vec<Skill>) = match &self.ready {
+                    Some(ready) => (
+                        ready
+                            .subagents
+                            .list()
+                            .iter()
+                            .map(|s| (s.name().to_owned(), s.description().to_owned()))
+                            .collect(),
+                        ready.skills.for_user().cloned().collect(),
+                    ),
+                    None => Default::default(),
+                };
+                completions(
+                    line,
+                    &self.sessions,
+                    &agents,
+                    &skills,
+                    &self.effort_choices(),
+                )
             }
             _ => Vec::new(),
         }
@@ -1077,10 +1161,12 @@ impl App {
             self.view.notice(Level::Info, "still connecting");
             return;
         };
-        if self.exploring.is_some() {
+        if let Some((agent, _, _)) = &self.exploring {
             self.view.notice(
                 Level::Info,
-                "explore is still working; send this once it reports, or press Esc to stop it",
+                format!(
+                    "{agent} is still working; send this once it reports, or press Esc to stop it"
+                ),
             );
             return;
         }
@@ -1200,11 +1286,27 @@ impl App {
             );
             return;
         }
-        let skill = command
-            .strip_prefix('/')
-            .filter(|name| !is_command(command) && ready.skills.get(name).is_some());
-        if let Some(name) = skill {
-            return self.start_skill(name, argument, line).await;
+        // `/skill:name request` starts a skill; `/name task` hands a task to a subagent.
+        if let Some(name) = command.strip_prefix("/skill:") {
+            let known = ready.skills.for_user().any(|s| s.name == name);
+            return match known {
+                true => self.start_skill(name, argument, line).await,
+                false => self
+                    .view
+                    .notice(Level::Warn, format!("no skill {name}; /skills lists them")),
+            };
+        }
+        let agent = command.strip_prefix('/').filter(|name| {
+            !is_command(command) && ready.subagents.list().iter().any(|s| s.name() == *name)
+        });
+        if let Some(agent) = agent {
+            return match argument {
+                "" => self.view.notice(
+                    Level::Info,
+                    format!("/{agent} <task>: what to hand to the {agent} subagent"),
+                ),
+                task => self.delegate(agent, task, line),
+            };
         }
         match command {
             "/new" => {
@@ -1363,11 +1465,6 @@ impl App {
                 }
                 Ok(points) => self.rewind = Some(Rewind::new(points)),
             },
-            "/explore" if argument.is_empty() => self.view.notice(
-                Level::Info,
-                "/explore <question>: what to find out about the code",
-            ),
-            "/explore" => self.explore(argument, line),
             "/mcp" => {
                 if ready.servers.is_empty() {
                     self.view.notice(
@@ -1394,17 +1491,10 @@ impl App {
                 if ready.skills.is_empty() {
                     self.view.notice(
                         Level::Info,
-                        "no skills; add them to .agents/skills/<name>/SKILL.md",
+                        "no skills; add them to .agents/skills/<name>/SKILL.md or ~/.config/rho/skills/<name>/SKILL.md",
                     );
-                }
-                for skill in ready.skills.skills() {
-                    let from = skill
-                        .path()
-                        .map_or_else(|| "built in".to_owned(), |path| path.display().to_string());
-                    self.view.notice(
-                        Level::Info,
-                        format!("/{}  {}  ({from})", skill.name, skill.description),
-                    );
+                } else {
+                    self.skills_pick = Some(SkillsPicker::new(&ready.skills));
                 }
             }
             _ => self.view.notice(
@@ -1414,7 +1504,7 @@ impl App {
         }
     }
 
-    /// Starts the skill `name` from `/name request`: its instructions go to the agent ahead of the request, so it
+    /// Starts the skill `name` from `/skill:name request`: its instructions go to the agent ahead of the request, so it
     /// needs no step to load them. The transcript shows what was typed.
     async fn start_skill(&mut self, name: &str, request: &str, line: &str) {
         let Some(ready) = &self.ready else { return };
@@ -1429,60 +1519,61 @@ impl App {
             .await;
     }
 
-    /// Starts the explore subagent on `question` from `/explore question`, without waiting for the model to
-    /// choose it. The transcript shows it as a task; its report then goes to the agent with the question.
-    fn explore(&mut self, question: &str, line: &str) {
+    /// Starts the subagent `agent` on `task` from `/agent task`, without waiting for the model to choose it. The
+    /// transcript shows it as a task; its report then goes to the agent with the task.
+    fn delegate(&mut self, agent: &str, task: &str, line: &str) {
         if self.ready.is_none() {
             return;
         }
         self.main_view().push(Item::User(line.to_owned()));
         self.main_view().apply(&Event::TurnStarted {
-            turn: EXPLORE.into(),
+            turn: DELEGATED.into(),
         });
         self.main_view().apply(&Event::ActionStarted {
-            turn: EXPLORE.into(),
-            call_id: EXPLORE.into(),
+            turn: DELEGATED.into(),
+            call_id: DELEGATED.into(),
             name: manifatura::subagents::TASK_TOOL.into(),
-            input: serde_json::json!({ "agent": EXPLORE, "description": question }),
+            input: serde_json::json!({ "agent": agent, "description": task }),
         });
         let abort = Abort::new();
         self.abort = Some(abort.clone());
         let (tx, rx) = mpsc::unbounded_channel();
         let ready = self.ready.as_ref().expect("checked");
-        let (subagents, session, prompt) = (
+        let (subagents, session, prompt, name) = (
             ready.subagents.clone(),
             ready.session.clone(),
-            question.to_owned(),
+            task.to_owned(),
+            agent.to_owned(),
         );
         tokio::spawn(async move {
             let lines = tx.clone();
             let log = move |line| {
                 let _ = lines.send(Explored::Line(line));
             };
-            let report = subagents.run(&session, EXPLORE, &prompt, &abort, log).await;
+            let report = subagents.run(&session, &name, &prompt, &abort, log).await;
             let _ = tx.send(Explored::Done(report));
         });
-        self.exploring = Some((question.to_owned(), rx));
+        self.exploring = Some((agent.to_owned(), task.to_owned(), rx));
     }
 
     async fn explored(&mut self, explored: Explored) {
         let report = match explored {
             Explored::Line(text) => {
                 return self.main_view().apply(&Event::ActionLog {
-                    turn: EXPLORE.into(),
-                    call_id: EXPLORE.into(),
+                    turn: DELEGATED.into(),
+                    call_id: DELEGATED.into(),
                     text,
                 });
             }
             Explored::Done(report) => report,
         };
-        let Some((question, _)) = self.exploring.take() else {
+        let Some((agent, task, _)) = self.exploring.take() else {
             return;
         };
         let aborted = self.abort.take().is_some_and(|abort| abort.is_aborted());
         self.main_view().apply(&Event::ActionResult {
-            turn: EXPLORE.into(),
-            call_id: EXPLORE.into(),
+            turn: DELEGATED.into(),
+            call_id: DELEGATED.into(),
             name: manifatura::subagents::TASK_TOOL.into(),
             output: report.output.clone(),
             is_error: report.is_error,
@@ -1493,13 +1584,13 @@ impl App {
             manifatura::Outcome::Completed
         };
         self.main_view().apply(&Event::TurnCompleted {
-            turn: EXPLORE.into(),
+            turn: DELEGATED.into(),
             outcome,
             error: None,
             usage: Default::default(),
         });
         if !aborted {
-            self.prompt(explore_message(&question, &report.output))
+            self.prompt(agent_message(&agent, &task, &report.output))
                 .await;
         }
     }
@@ -2121,7 +2212,7 @@ mod tests {
                 .map(|(e, about)| (effort_label(Some(e)), about))
                 .chain([("default".into(), String::new())])
                 .collect();
-            completions(line, &sessions, &[], &levels)
+            completions(line, &sessions, &[], &[], &levels)
                 .into_iter()
                 .map(|c| c.text)
                 .collect()
@@ -2145,17 +2236,17 @@ mod tests {
             Vec::<String>::new(),
             "a complete id needs no completing"
         );
-        assert!(names("hello").is_empty() && names("/explore focus").is_empty());
+        assert!(names("hello").is_empty() && names("/kill 3").is_empty());
         assert!(
-            completions("/new", &sessions, &[], &[])[0].runs
-                && !completions("/explore", &sessions, &[], &[])[0].runs
+            completions("/new", &sessions, &[], &[], &[])[0].runs
+                && !completions("/kill", &sessions, &[], &[], &[])[0].runs
         );
         assert_eq!(names("/effort o"), ["/effort off"]);
         assert_eq!(names("/effort m"), ["/effort medium"]);
     }
 
     #[test]
-    fn skills_complete_after_the_commands_they_do_not_shadow() {
+    fn skills_complete_as_skill_and_agents_as_commands() {
         let skill = |name: &str| {
             Skill::parse(&format!(
                 "---\nname: {name}\ndescription: About {name}.\n---\nBody."
@@ -2163,26 +2254,31 @@ mod tests {
             .unwrap()
         };
         let skills = [skill("codebase-tour"), skill("status")];
-        let found = completions("/", &[], &skills, &[]);
-        let tour = found
-            .iter()
-            .find(|c| c.text == "/codebase-tour ")
-            .expect("the skill is offered");
-        assert!(!tour.runs && tour.about == "About codebase-tour.");
+        let agents = [
+            ("explore".to_string(), "Answers one question.".to_string()),
+            ("status".to_string(), "Shadowed by the command.".to_string()),
+        ];
+        let texts = |line: &str| -> Vec<String> {
+            completions(line, &[], &agents, &skills, &[])
+                .into_iter()
+                .map(|c| c.text)
+                .collect()
+        };
         assert_eq!(
-            found
-                .iter()
-                .filter(|c| c.text.starts_with("/status"))
-                .count(),
-            1,
-            "the command wins"
+            texts("/sk"),
+            ["/skills", "/skill:codebase-tour ", "/skill:status "]
         );
+        assert_eq!(texts("/ex"), ["/exit", "/explore "]);
         assert_eq!(
-            completions("/co", &[], &skills, &[])
-                .iter()
-                .map(|c| c.text.as_str())
-                .collect::<Vec<_>>(),
-            ["/codebase-tour "]
+            texts("/stat"),
+            ["/status"],
+            "the command wins over an agent"
+        );
+        let found = completions("/skill:c", &[], &agents, &skills, &[]);
+        assert!(!found[0].runs && found[0].about == "About codebase-tour.");
+        assert_eq!(
+            completions("/explore", &[], &agents, &skills, &[])[0].label,
+            "/explore <task>"
         );
     }
 }

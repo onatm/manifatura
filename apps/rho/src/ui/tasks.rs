@@ -20,7 +20,7 @@ use super::{App, Level, View};
 /// How much of a command's output the panel reads, from its end.
 const TAIL_BYTES: u64 = 64 * 1024;
 
-/// A subagent this session started, through the task tool or `/explore`.
+/// A subagent this session started, through the task tool or `/name task`.
 pub(crate) struct Child {
     pub(crate) id: SessionId,
     pub(crate) agent: String,
