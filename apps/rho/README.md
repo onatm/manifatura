@@ -28,9 +28,9 @@ cargo run -p rho -- models           # the models your plan offers
   one's; older ones become a one-line stub it can act on by calling the tool again. A long turn drops its own oldest
   results in batches past 70% of the window. Only past 85% is a summary written, and when the model still finds the
   request too long, the turn ends with your message back in the composer and the footer's context share in red.
-- **Model and effort**: `/model` lists the plan's models: ↑↓ choose one, which starts at its default effort, ←→
-  change the effort, Enter uses them. `/model <name>` (at its default effort), `/effort <level>` and `/effort default`
-  do the same from the composer. A choice holds for this session and becomes where new ones start: rho writes it to
+- **Model and effort**: `/models` opens the plan's models: ↑↓ choose one, which starts at its default effort, ←→
+  change the effort, Enter uses them. `/effort` opens the current model's efforts alone; `/effort <level>` and
+  `/effort default` set one from the composer. A choice holds for this session and becomes where new ones start: rho writes it to
   `model` and `effort` in your config. A session keeps the model and effort it last ran on, whatever your defaults
   become later; `--model` and `--effort` choose for one run without saving. With no `model` in the config, a new
   session starts on the plan's first model at its default level.
@@ -82,7 +82,7 @@ The `rules.toml` and `mcp.toml` of earlier versions are moved into it on first s
 | `~/.local/share/rho/sessions/<directory>` | Sessions, one JSON-lines file each |
 | `~/.local/share/rho/snapshots/<directory>.git` | The workspace as each turn found it |
 
-In the chat, `/help` lists the commands: `/model` (the model and its effort), `/tasks` and `/kill` for background commands
+In the chat, `/help` lists the commands: `/models` and `/effort`, `/tasks` and `/kill` for background commands
 and subagents, `/rules`, `/rewind`, `/resume`, `/theme`, `/sidebar` and more. Enter while the agent works steers it before
 its next step; Esc stops it.
 
@@ -91,7 +91,7 @@ The transcript marks each thing in the left column: `›` you, `•` an update w
 plan, `◆` a skill, `⌁` another tool. The answer is unmarked and brightest. Ctrl-O (or `/tools`) prints this turn's tool
 output in full. The footer shows the model, effort and a context meter that turns yellow at 80% and red at 95%.
 
-`/model` is a grid of the plan's models and their efforts, with each model's default `◎` and the session's choice `●`: ↑↓
+`/models` is a grid of the plan's models and their efforts, with each model's default `◎` and the session's choice `●`: ↑↓
 move to a model at its default, ←→ change the effort, Enter uses them here and for new sessions.
 
 Ctrl-B (or `/sidebar`) opens a sidebar beside the composer on terminals 100 columns or wider: the session's model, effort

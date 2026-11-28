@@ -65,13 +65,13 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "go back to before a message: the code, the conversation or both",
     ),
     (
-        "/model",
-        "[model]",
+        "/models",
+        "",
         "choose the model and effort, for this session and new ones",
     ),
     (
         "/effort",
-        "[level]",
+        "",
         "how much the model reasons, for this session and new ones",
     ),
     (
@@ -175,7 +175,7 @@ struct App {
     exploring: Option<(String, String, mpsc::UnboundedReceiver<Explored>)>,
     /// The `/skills` list, while it is open.
     skills_pick: Option<SkillsPicker>,
-    /// The `/model` list, while it is open.
+    /// The `/models` grid, or `/effort`'s row of it, while it is open.
     model_pick: Option<ModelPicker>,
     /// The model and effort `/new` starts on: the last chosen, else the config's.
     start_with: (Option<String>, Option<Effort>),
@@ -1420,21 +1420,12 @@ impl App {
                     }
                 }
             },
-            "/model" | "/effort" if argument.is_empty() => {
+            "/models" => {
                 self.model_pick = Some(ModelPicker::new(&ready.models, &self.model, self.effort));
             }
-            "/model" => {
-                if ready.models.iter().any(|m| m.slug == argument) {
-                    // A model starts at its own default effort.
-                    let effort = default_effort(&ready.models, argument)
-                        .or_else(|| fit_effort(&ready.models, argument, &[self.effort]));
-                    self.use_model(argument.to_owned(), effort).await;
-                } else {
-                    self.view.notice(
-                        Level::Warn,
-                        format!("the plan has no model {argument}; /model lists them"),
-                    );
-                }
+            "/effort" if argument.is_empty() => {
+                self.model_pick =
+                    Some(ModelPicker::effort(&ready.models, &self.model, self.effort));
             }
             "/effort" if argument == "default" => {
                 match default_effort(&ready.models, &self.model) {

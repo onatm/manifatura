@@ -1,4 +1,4 @@
-//! The `/model` grid: the plan's models down, their efforts across, each model's default marked `◎` and the
+//! The `/models` grid: the plan's models down, their efforts across, each model's default marked `◎` and the
 //! session's `●`. ↑↓ move between models, and a model moved to starts at its default effort (the current one keeps
 //! the session's); ←→ change the effort; Enter uses both, for this session and the ones started after; Esc closes
 //! without changing anything.
@@ -24,6 +24,8 @@ pub(crate) enum Outcome {
 }
 
 pub(crate) struct ModelPicker {
+    /// What the list is headed: the models and their efforts, or the current model's efforts alone.
+    title: &'static str,
     models: Vec<Model>,
     /// The session's model and effort when the list opened.
     current: (String, Option<Effort>),
@@ -36,6 +38,7 @@ impl ModelPicker {
     pub(crate) fn new(models: &[Model], model: &str, effort: Option<Effort>) -> Self {
         let selected = models.iter().position(|m| m.slug == model).unwrap_or(0);
         let mut picker = Self {
+            title: "Model and effort",
             models: models.to_vec(),
             current: (model.to_owned(), effort),
             selected,
@@ -43,6 +46,19 @@ impl ModelPicker {
         };
         picker.select(selected);
         picker
+    }
+
+    /// The current model's efforts alone, for `/effort`.
+    pub(crate) fn effort(models: &[Model], model: &str, effort: Option<Effort>) -> Self {
+        let one = models
+            .iter()
+            .find(|m| m.slug == model)
+            .cloned()
+            .unwrap_or_else(|| Model::new(model));
+        Self {
+            title: "Effort",
+            ..Self::new(&[one], model, effort)
+        }
     }
 
     /// Moves to model `at`: the current model at the session's effort, another at its default.
@@ -137,7 +153,7 @@ impl ModelPicker {
             .max(5);
         let centred = |text: &str| format!("{text:^cell$}");
         let mut rows = vec![Line::from(vec![
-            Span::styled("Model and effort", accent()),
+            Span::styled(self.title, accent()),
             Span::styled(
                 format!(
                     " · now {} at {}",
@@ -203,13 +219,12 @@ impl ModelPicker {
                 Span::styled(clip(&about, width.saturating_sub(name.len() + 4)), dim()),
             ]));
         }
-        rows.push(Line::styled(
-            clip(
-                "◎ its default · ● now · ↑↓ model, at its default · ←→ effort · Enter here and for new sessions · Esc",
-                width,
-            ),
-            dim(),
-        ));
+        let hint = if self.models.len() > 1 {
+            "◎ its default · ● now · ↑↓ model, at its default · ←→ effort · Enter here and for new sessions · Esc"
+        } else {
+            "◎ the model's default · ● now · ←→ effort · Enter here and for new sessions · Esc"
+        };
+        rows.push(Line::styled(clip(hint, width), dim()));
         rows.truncate(height);
         rows
     }
@@ -285,5 +300,19 @@ mod tests {
             "{rows:?}"
         );
         assert_eq!(picker.key(key(KeyCode::Esc)), Some(Outcome::Cancel));
+    }
+
+    #[test]
+    fn effort_alone_changes_only_the_effort() {
+        let key = |code| KeyEvent::from(code);
+        let mut picker = ModelPicker::effort(&models(), "b", Some(Effort::High));
+        let rows: Vec<String> = picker.lines(100, 10).iter().map(Line::to_string).collect();
+        assert!(rows[0].starts_with("Effort") && rows.len() == 4, "{rows:?}");
+        picker.key(key(KeyCode::Down));
+        picker.key(key(KeyCode::Left));
+        assert_eq!(
+            picker.key(key(KeyCode::Enter)),
+            Some(Outcome::Choose("b".into(), Some(Effort::Medium)))
+        );
     }
 }
