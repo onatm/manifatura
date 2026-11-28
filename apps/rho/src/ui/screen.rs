@@ -2,6 +2,9 @@
 
 use std::io::{self, stdout};
 
+use crossterm::execute;
+use crossterm::terminal::Clear;
+
 use ratatui::backend::{Backend, ClearType};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect, Size};
@@ -74,6 +77,9 @@ impl ChatScreen {
         if width == 0 || height == 0 {
             return Ok(());
         }
+        if app.view.take_cleared() {
+            self.clear()?;
+        }
         let dock = app.pane_height(width, height);
         self.position_pane(Rect::new(0, height - dock, width, dock))?;
         let items = app.view.take_committed();
@@ -88,6 +94,18 @@ impl ChatScreen {
             .draw(self.term.backend_mut(), self.pane, items, live)?;
         self.term.draw(|f| app.draw(f))?;
         self.term.set_cursor_position((0, self.transcript.next))?;
+        Ok(())
+    }
+
+    /// Wipes the screen and the terminal's own scrollback, so the transcript starts again from the top.
+    fn clear(&mut self) -> io::Result<()> {
+        let backend = self.term.backend_mut();
+        backend.clear_region(ClearType::All)?;
+        execute!(stdout(), Clear(crossterm::terminal::ClearType::Purge))?;
+        backend.set_cursor_position(Position::ORIGIN)?;
+        self.transcript = Transcript::default();
+        // Placed again from the top on this draw.
+        self.pane = Rect::ZERO;
         Ok(())
     }
 

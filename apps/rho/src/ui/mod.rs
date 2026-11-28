@@ -55,11 +55,6 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "go back to before a message: the code, the conversation or both",
     ),
     (
-        "/undo",
-        "",
-        "undo the last turn: its changes and the conversation",
-    ),
-    (
         "/explore",
         "<question>",
         "hand a question about the code to the explore subagent",
@@ -1154,21 +1149,12 @@ impl App {
                 },
                 Err(error) => self.view.notice(Level::Warn, error),
             },
-            "/rewind" | "/undo" => match rewind_points(&ready.session).await {
+            "/rewind" => match rewind_points(&ready.session).await {
                 Err(error) => self
                     .view
                     .notice(Level::Error, format!("could not read the session: {error}")),
                 Ok(points) if points.is_empty() => {
                     self.view.notice(Level::Info, "nothing to go back to yet")
-                }
-                Ok(points) if command == "/undo" => {
-                    let point = points.into_iter().next().expect("checked");
-                    let restore = if point.tree.is_some() {
-                        Restore::Both
-                    } else {
-                        Restore::Conversation
-                    };
-                    self.rewind_to(point, restore).await;
                 }
                 Ok(points) => self.rewind = Some(Rewind::new(points)),
             },
@@ -1322,6 +1308,7 @@ impl App {
     /// both. A conversation that goes back puts the message in the composer, to edit and send again.
     async fn rewind_to(&mut self, point: Point, restore: Restore) {
         let Some(ready) = &self.ready else { return };
+        let mut files = None;
         if restore != Restore::Conversation {
             let Some(tree) = &point.tree else {
                 self.view.notice(
@@ -1331,14 +1318,13 @@ impl App {
                 return;
             };
             match ready.snapshots.restore(&*ready.env, tree).await {
-                Ok(r) => self.view.notice(
-                    Level::Info,
-                    format!(
+                Ok(r) => {
+                    files = Some(format!(
                         "files restored: {} written back, {} removed",
                         r.restored.len(),
                         r.removed.len()
-                    ),
-                ),
+                    ))
+                }
                 Err(error) => {
                     self.view.notice(
                         Level::Error,
@@ -1351,6 +1337,20 @@ impl App {
         if restore != Restore::Code {
             match ready.session.branch(point.parent.clone()).await {
                 Ok(()) => {
+                    // The transcript goes back too: what came after the message is gone from the screen.
+                    match ready.session.history().await {
+                        Ok(history) => {
+                            self.view.clear();
+                            self.view.replay(&history);
+                        }
+                        Err(error) => self.view.notice(
+                            Level::Warn,
+                            format!("could not redraw the conversation: {error}"),
+                        ),
+                    }
+                    if let Some(files) = files.take() {
+                        self.view.notice(Level::Info, files);
+                    }
                     let first = point.text.lines().next().unwrap_or_default();
                     self.view.notice(
                         Level::Info,
@@ -1364,6 +1364,9 @@ impl App {
                     .view
                     .notice(Level::Error, format!("could not rewind: {error}")),
             }
+        }
+        if let Some(files) = files {
+            self.view.notice(Level::Info, files);
         }
     }
 

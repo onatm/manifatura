@@ -535,6 +535,8 @@ pub(crate) struct View {
     thinking_since: Option<Instant>,
     running: Vec<Running>,
     tools: Vec<Arc<ToolOutput>>,
+    /// Set when the scrollback is to be wiped before the next items are written.
+    cleared: bool,
     pub(crate) activity: Activity,
     /// When the turn started.
     pub(crate) since: Option<Instant>,
@@ -550,6 +552,7 @@ impl View {
             thinking_since: None,
             running: Vec::new(),
             tools: Vec::new(),
+            cleared: false,
             activity: Activity::Idle,
             since: None,
         }
@@ -565,6 +568,18 @@ impl View {
 
     pub(crate) fn notice(&mut self, level: Level, text: impl Into<String>) {
         self.push(Item::Notice(level, text.into()));
+    }
+
+    /// Wipes the transcript: the scrollback is cleared before the next items are written.
+    pub(crate) fn clear(&mut self) {
+        self.committed.clear();
+        self.tools.clear();
+        self.cleared = true;
+    }
+
+    /// Whether the scrollback is to be wiped, once.
+    pub(crate) fn take_cleared(&mut self) -> bool {
+        std::mem::take(&mut self.cleared)
     }
 
     /// The items finished since the last call, oldest first, for the scrollback.
@@ -1279,5 +1294,18 @@ mod tests {
     fn token_counts_are_short() {
         assert_eq!(tokens(850), "850");
         assert_eq!(tokens(12_345), "12.3k");
+    }
+
+    #[test]
+    fn a_clear_drops_what_was_not_yet_written_and_asks_once_for_a_wipe() {
+        let mut view = View::new();
+        view.notice(Level::Info, "later message");
+        view.clear();
+        view.replay(&[Message::user("kept question")]);
+        assert!(view.take_cleared());
+        assert!(!view.take_cleared());
+        let items = view.take_committed();
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], Item::User(text) if text == "kept question"));
     }
 }

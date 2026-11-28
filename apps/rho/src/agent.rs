@@ -91,7 +91,7 @@ pub(crate) struct Prepared {
     pub(crate) skills: SkillSet,
     /// The subagents behind the `task` tool, which `/explore` also starts.
     pub(crate) subagents: Subagents,
-    /// The files as each turn found them, for `/rewind` and `/undo`.
+    /// The files as each turn found them, for `/rewind`.
     pub(crate) snapshots: Snapshots,
     /// Where the tools act.
     pub(crate) env: Arc<Sandbox<Local>>,
